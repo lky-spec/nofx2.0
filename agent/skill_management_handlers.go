@@ -1385,9 +1385,9 @@ func formatExchangeCreateDraftSummary(lang string, session skillSession) string 
 			)
 		case "aster":
 			lines = append(lines,
-				fmt.Sprintf("- Aster User：%s", defaultIfEmpty(fieldValue(session, "aster_user"), "未设置")),
-				fmt.Sprintf("- Aster Signer：%s", defaultIfEmpty(fieldValue(session, "aster_signer"), "未设置")),
-				fmt.Sprintf("- 已提供 Aster 私钥：%t", fieldValue(session, "aster_private_key") != ""),
+				fmt.Sprintf("- Aster 主钱包地址：%s", defaultIfEmpty(fieldValue(session, "aster_user"), "未设置")),
+				fmt.Sprintf("- Aster API Pro 代理钱包地址：%s", defaultIfEmpty(fieldValue(session, "aster_signer"), "未设置")),
+				fmt.Sprintf("- 已提供 Aster API Pro 代理钱包私钥：%t", fieldValue(session, "aster_private_key") != ""),
 			)
 		case "lighter":
 			lines = append(lines,
@@ -1432,9 +1432,9 @@ func formatExchangeCreateDraftSummary(lang string, session skillSession) string 
 		)
 	case "aster":
 		lines = append(lines,
-			fmt.Sprintf("- Aster user: %s", defaultIfEmpty(fieldValue(session, "aster_user"), "not set")),
-			fmt.Sprintf("- Aster signer: %s", defaultIfEmpty(fieldValue(session, "aster_signer"), "not set")),
-			fmt.Sprintf("- Aster private key provided: %t", fieldValue(session, "aster_private_key") != ""),
+			fmt.Sprintf("- Aster main wallet address: %s", defaultIfEmpty(fieldValue(session, "aster_user"), "not set")),
+			fmt.Sprintf("- Aster API Pro wallet address: %s", defaultIfEmpty(fieldValue(session, "aster_signer"), "not set")),
+			fmt.Sprintf("- Aster API Pro wallet private key provided: %t", fieldValue(session, "aster_private_key") != ""),
 		)
 	case "lighter":
 		lines = append(lines,
@@ -1926,14 +1926,14 @@ func (a *Agent) describeExchange(storeUserID, lang string, target *EntityReferen
 		credentialLinesEn = append(credentialLinesEn, fmt.Sprintf("- Hyperliquid wallet address: %s", defaultIfEmpty(exchange.HyperliquidWalletAddr, "not set")))
 	case "aster":
 		credentialLinesZh = append(credentialLinesZh,
-			fmt.Sprintf("- Aster User：%s", defaultIfEmpty(exchange.AsterUser, "未设置")),
-			fmt.Sprintf("- Aster Signer：%s", defaultIfEmpty(exchange.AsterSigner, "未设置")),
-			fmt.Sprintf("- Aster 私钥：%t", exchange.HasAsterPrivateKey),
+			fmt.Sprintf("- Aster 主钱包地址：%s", defaultIfEmpty(exchange.AsterUser, "未设置")),
+			fmt.Sprintf("- Aster API Pro 代理钱包地址：%s", defaultIfEmpty(exchange.AsterSigner, "未设置")),
+			fmt.Sprintf("- Aster API Pro 代理钱包私钥：%t", exchange.HasAsterPrivateKey),
 		)
 		credentialLinesEn = append(credentialLinesEn,
-			fmt.Sprintf("- Aster user: %s", defaultIfEmpty(exchange.AsterUser, "not set")),
-			fmt.Sprintf("- Aster signer: %s", defaultIfEmpty(exchange.AsterSigner, "not set")),
-			fmt.Sprintf("- Aster private key present: %t", exchange.HasAsterPrivateKey),
+			fmt.Sprintf("- Aster main wallet address: %s", defaultIfEmpty(exchange.AsterUser, "not set")),
+			fmt.Sprintf("- Aster API Pro wallet address: %s", defaultIfEmpty(exchange.AsterSigner, "not set")),
+			fmt.Sprintf("- Aster API Pro wallet private key present: %t", exchange.HasAsterPrivateKey),
 		)
 	case "lighter":
 		credentialLinesZh = append(credentialLinesZh,
@@ -2147,20 +2147,20 @@ func (a *Agent) handleExchangeCreateSkill(storeUserID string, userID int64, lang
 	if accountName == "" {
 		missing = append(missing, displayCatalogFieldName("account_name", lang))
 	}
-	if fieldValue(session, "api_key") == "" {
-		missing = append(missing, displayCatalogFieldName("api_key", lang))
-	}
-	if fieldValue(session, "secret_key") == "" {
-		missing = append(missing, displayCatalogFieldName("secret_key", lang))
-	}
-	switch exType {
-	case "okx":
-		if fieldValue(session, "passphrase") == "" {
-			missing = append(missing, displayCatalogFieldName("passphrase", lang))
-		}
-	case "hyperliquid":
-		if fieldValue(session, "hyperliquid_wallet_addr") == "" {
-			missing = append(missing, "Hyperliquid Wallet")
+	if exType != "" {
+		for _, field := range store.MissingRequiredExchangeCredentialFields(
+			exType,
+			fieldValue(session, "api_key"),
+			fieldValue(session, "secret_key"),
+			fieldValue(session, "passphrase"),
+			fieldValue(session, "hyperliquid_wallet_addr"),
+			fieldValue(session, "aster_user"),
+			fieldValue(session, "aster_signer"),
+			fieldValue(session, "aster_private_key"),
+			fieldValue(session, "lighter_wallet_addr"),
+			fieldValue(session, "lighter_api_key_private_key"),
+		) {
+			missing = append(missing, displayCatalogFieldName(field, lang))
 		}
 	}
 	if len(missing) > 0 {

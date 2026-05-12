@@ -163,19 +163,19 @@ func displayCatalogFieldName(field, lang string) string {
 		return "Hyperliquid unified account"
 	case "aster_user":
 		if lang == "zh" {
-			return "Aster User"
+			return "Aster 主钱包地址"
 		}
-		return "Aster user"
+		return "Aster main wallet address"
 	case "aster_signer":
 		if lang == "zh" {
-			return "Aster Signer"
+			return "Aster API Pro 代理钱包地址"
 		}
-		return "Aster signer"
+		return "Aster API Pro wallet address"
 	case "aster_private_key":
 		if lang == "zh" {
-			return "Aster 私钥"
+			return "Aster API Pro 代理钱包私钥"
 		}
-		return "Aster private key"
+		return "Aster API Pro wallet private key"
 	case "lighter_wallet_addr":
 		if lang == "zh" {
 			return "Lighter 钱包地址"

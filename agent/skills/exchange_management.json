@@ -55,17 +55,17 @@
     "aster_user": {
       "type": "credential",
       "required_for": ["aster"],
-      "description": "Aster 用户地址，Aster 账户启用前必须填写。"
+      "description": "Aster 主钱包地址：用户登录 Aster、持有交易资金的 EVM 钱包地址。不是用户名。Aster 账户启用前必须填写。"
     },
     "aster_signer": {
       "type": "credential",
       "required_for": ["aster"],
-      "description": "Aster Signer 地址，Aster 账户启用前必须填写。"
+      "description": "Aster API Pro 代理钱包地址：从 Aster API Wallet 页面生成，用于签名交易。Aster 账户启用前必须填写。"
     },
     "aster_private_key": {
       "type": "credential",
       "required_for": ["aster"],
-      "description": "Aster 私钥，Aster 账户启用前必须填写。"
+      "description": "Aster API Pro 代理钱包私钥：从 Aster API Wallet 页面获取，只用于本地签名。不要索要或暴露主钱包私钥。Aster 账户启用前必须填写。"
     },
     "lighter_wallet_addr": {
       "type": "credential",
@@ -98,7 +98,7 @@
     "Hyperliquid 创建/更新时应与手动页面保持一致：至少收集 api_key + hyperliquid_wallet_addr。",
     "Hyperliquid 账户启用前必须填写 hyperliquid_wallet_addr。",
     "若用户使用 Hyperliquid unified account 模式，应明确记录 hyperliquid_unified_account 开关状态。",
-    "Aster 账户启用前必须填写 aster_user、aster_signer、aster_private_key 三个字段，任一缺失都不能启用。",
+    "Aster 账户启用前必须填写 aster_user、aster_signer、aster_private_key 三个字段；对用户解释时必须说成主钱包地址、API Pro 代理钱包地址、API Pro 代理钱包私钥，不能说成 Aster 用户名。",
     "Lighter 账户启用前必须填写 lighter_wallet_addr + lighter_api_key_private_key；若当前账户模式还依赖 lighter_private_key，也要先补齐后再启用。",
     "lighter_api_key_index 超出 0～255 时自动收敛到边界值并告知用户。",
     "删除操作不可逆，必须先向用户确认再执行。"
@@ -123,7 +123,7 @@
       "goal": "创建一个可供 trader 绑定使用的交易所配置。",
       "dynamic_rules": [
         "确认 exchange_type 后，根据 per_exchange_required_fields 决定需要追问哪些凭证字段。",
-        "Binance/Bybit/Gate/Indodax 需要 API Key + Secret；OKX/Bitget/KuCoin 还必须追问 passphrase；Hyperliquid 必须追问 api_key + 钱包地址，并允许记录 unified account 开关；Aster 必须追问 user/signer/private_key；Lighter 必须追问钱包地址和 api_key_private_key。",
+        "Binance/Bybit/Gate/Indodax 需要 API Key + Secret；OKX/Bitget/KuCoin 还必须追问 passphrase；Hyperliquid 必须追问 api_key + 钱包地址，并允许记录 unified account 开关；Aster 必须追问主钱包地址、API Pro 代理钱包地址、API Pro 代理钱包私钥；Lighter 必须追问钱包地址和 api_key_private_key。",
         "如果用户选择 OKX、Bitget 或 KuCoin，不能把 passphrase 说成可选项；没有 passphrase 时应停在补字段，不要创建半成品。",
         "凭证字段格式不符时，用人话告知用户正确格式，不要静默丢弃。",
         "若当前父任务只是缺一个可用交易所，本动作完成后应允许父任务恢复并消费新的 exchange_id。",

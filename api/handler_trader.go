@@ -126,13 +126,13 @@ func missingExchangeFields(exchange *store.Exchange) []string {
 		}
 	case "aster":
 		if strings.TrimSpace(exchange.AsterUser) == "" {
-			missing = append(missing, "Aster User")
+			missing = append(missing, "Aster 主钱包地址")
 		}
 		if strings.TrimSpace(exchange.AsterSigner) == "" {
-			missing = append(missing, "Aster Signer")
+			missing = append(missing, "Aster API Pro 代理钱包地址")
 		}
 		if exchange.AsterPrivateKey == "" {
-			missing = append(missing, "Aster Private Key")
+			missing = append(missing, "Aster API Pro 代理钱包私钥")
 		}
 	case "lighter":
 		if strings.TrimSpace(exchange.LighterWalletAddr) == "" {
@@ -173,12 +173,12 @@ func validateExchangeForTraderCreation(exchange *store.Exchange) (string, string
 	missing := missingExchangeFields(exchange)
 	if len(missing) > 0 {
 		return formatTraderCreationError(
-			fmt.Sprintf("交易所账户「%s」的配置还不完整，缺少 %s", exchangeDisplayName(exchange), strings.Join(missing, "、")),
-			"请前往「设置 > 交易所配置」补全该账户的必填信息后，再重新创建机器人",
-		), "trader.create.exchange_missing_fields", mapStringPairs(
-			"exchange_name", exchangeDisplayName(exchange),
-			"missing_fields", strings.Join(missing, ", "),
-		)
+				fmt.Sprintf("交易所账户「%s」的配置还不完整，缺少 %s", exchangeDisplayName(exchange), strings.Join(missing, "、")),
+				"请前往「设置 > 交易所配置」补全该账户的必填信息后，再重新创建机器人",
+			), "trader.create.exchange_missing_fields", mapStringPairs(
+				"exchange_name", exchangeDisplayName(exchange),
+				"missing_fields", strings.Join(missing, ", "),
+			)
 	}
 
 	switch exchange.ExchangeType {
@@ -186,12 +186,12 @@ func validateExchangeForTraderCreation(exchange *store.Exchange) (string, string
 		return "", "", nil
 	default:
 		return formatTraderCreationError(
-			fmt.Sprintf("交易所账户「%s」使用了当前版本暂不支持的类型 %s", exchangeDisplayName(exchange), exchange.ExchangeType),
-			"请改用当前版本支持的交易所账户后，再重新创建机器人",
-		), "trader.create.exchange_unsupported", mapStringPairs(
-			"exchange_name", exchangeDisplayName(exchange),
-			"exchange_type", exchange.ExchangeType,
-		)
+				fmt.Sprintf("交易所账户「%s」使用了当前版本暂不支持的类型 %s", exchangeDisplayName(exchange), exchange.ExchangeType),
+				"请改用当前版本支持的交易所账户后，再重新创建机器人",
+			), "trader.create.exchange_unsupported", mapStringPairs(
+				"exchange_name", exchangeDisplayName(exchange),
+				"exchange_type", exchange.ExchangeType,
+			)
 	}
 }
 
@@ -215,7 +215,7 @@ func classifyTraderSetupReason(reason string) (string, string) {
 	case strings.Contains(lower, "failed to initialize hyperliquid trader"):
 		return "trader.reason.hyperliquid_init_failed", "Hyperliquid 账户初始化失败，请确认私钥、主钱包地址和 Agent Wallet 配置是否正确"
 	case strings.Contains(lower, "failed to initialize aster trader"):
-		return "trader.reason.aster_init_failed", "Aster 账户初始化失败，请确认 Aster User、Signer 和私钥是否正确"
+		return "trader.reason.aster_init_failed", "Aster 账户初始化失败，请确认主钱包地址、API Pro 代理钱包地址和 API Pro 代理钱包私钥是否正确"
 	case strings.Contains(lower, "failed to get meta information"):
 		return "trader.reason.exchange_meta_unavailable", "系统暂时无法从交易所读取账户元信息"
 	case strings.Contains(lower, "security check failed") && strings.Contains(lower, "agent wallet balance too high"):
@@ -531,14 +531,14 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 
 	if startupWarning == "" {
 		if loadErr := s.traderManager.GetLoadError(traderID); loadErr != nil {
-		logger.Infof("⚠️ Trader %s failed to load after creation: %v", traderID, loadErr)
+			logger.Infof("⚠️ Trader %s failed to load after creation: %v", traderID, loadErr)
 			startupWarning = describeTraderCreationWarning(req.Name, loadErr)
 		}
 	}
 
 	if startupWarning == "" {
 		if _, getErr := s.traderManager.GetTrader(traderID); getErr != nil {
-		logger.Infof("⚠️ Trader %s not found in memory after creation: %v", traderID, getErr)
+			logger.Infof("⚠️ Trader %s not found in memory after creation: %v", traderID, getErr)
 			startupWarning = describeTraderCreationWarning(req.Name, getErr)
 		}
 	}
@@ -546,11 +546,11 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 	logger.Infof("✓ Trader created successfully: %s (model: %s, exchange: %s)", req.Name, req.AIModelID, req.ExchangeID)
 
 	c.JSON(http.StatusCreated, gin.H{
-		"trader_id":        traderID,
-		"trader_name":      req.Name,
-		"ai_model":         req.AIModelID,
-		"is_running":       false,
-		"startup_warning":  startupWarning,
+		"trader_id":       traderID,
+		"trader_name":     req.Name,
+		"ai_model":        req.AIModelID,
+		"is_running":      false,
+		"startup_warning": startupWarning,
 	})
 }
 

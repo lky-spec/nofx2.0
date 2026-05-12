@@ -345,13 +345,38 @@ func TestSkillVisibleFieldSummaryForExchangeUsesReadableNames(t *testing.T) {
 	a := New(nil, st, DefaultConfig(), slog.Default())
 
 	summary := a.skillVisibleFieldSummary("default", "zh", "exchange_management", "update")
-	for _, expected := range []string{"交易所类型", "账户名", "API Key", "Secret", "Passphrase", "Hyperliquid 钱包地址", "Aster User", "Lighter API Key 私钥", "Lighter API Key Index"} {
+	for _, expected := range []string{"交易所类型", "账户名", "API Key", "Secret", "Passphrase", "Hyperliquid 钱包地址", "Aster 主钱包地址", "Lighter API Key 私钥", "Lighter API Key Index"} {
 		if !strings.Contains(summary, expected) {
 			t.Fatalf("expected field label %q in summary, got: %s", expected, summary)
 		}
 	}
 	if strings.Contains(summary, "hyperliquid_wallet_addr") || strings.Contains(summary, "lighter_api_key_private_key") {
 		t.Fatalf("field summary should use readable labels instead of raw keys: %s", summary)
+	}
+}
+
+func TestExchangeCreateAsterMissingPromptUsesFrontendFieldLabels(t *testing.T) {
+	a := &Agent{}
+	session := skillSession{
+		Name:   "exchange_management",
+		Action: "create",
+		Phase:  "collecting",
+		Fields: map[string]string{
+			"exchange_type": "aster",
+			"account_name":  "我的Aster主账户",
+		},
+	}
+
+	reply := a.handleExchangeCreateSkill("default", 1, "zh", "", session)
+	for _, expected := range []string{"Aster 主钱包地址", "Aster API Pro 代理钱包地址", "Aster API Pro 代理钱包私钥"} {
+		if !strings.Contains(reply, expected) {
+			t.Fatalf("expected Aster missing prompt to contain %q, got: %s", expected, reply)
+		}
+	}
+	for _, unexpected := range []string{"Aster User", "用户名", "API Key", "Secret"} {
+		if strings.Contains(reply, unexpected) {
+			t.Fatalf("Aster prompt should not contain %q, got: %s", unexpected, reply)
+		}
 	}
 }
 

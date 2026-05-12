@@ -38,8 +38,8 @@ type SafeExchangeConfig struct {
 	Testnet               bool   `json:"testnet,omitempty"`
 	HyperliquidWalletAddr string `json:"hyperliquidWalletAddr"` // Hyperliquid wallet address (not sensitive)
 	HasAsterPrivateKey    bool   `json:"has_aster_private_key"`
-	AsterUser             string `json:"asterUser"`         // Aster username (not sensitive)
-	AsterSigner           string `json:"asterSigner"`       // Aster signer (not sensitive)
+	AsterUser             string `json:"asterUser"`         // Aster main wallet address (not sensitive)
+	AsterSigner           string `json:"asterSigner"`       // Aster API Pro wallet address (not sensitive)
 	LighterWalletAddr     string `json:"lighterWalletAddr"` // LIGHTER wallet address (not sensitive)
 	HasLighterPrivateKey  bool   `json:"has_lighter_private_key"`
 	HasLighterAPIKey      bool   `json:"has_lighter_api_key_private_key"`

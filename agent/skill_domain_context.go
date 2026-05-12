@@ -59,6 +59,8 @@ func buildSkillDomainPrimer(lang, skillName string) string {
 				"### 交易所配置领域约束",
 				"- 当前领域是交易所账户配置，不是 AI 模型配置。",
 				"- exchange_type 指交易所类型，provider 这个词不应用来代指交易所。",
+				"- Aster 的 aster_user 是主钱包地址，不是用户名，也不是可以随便取的账户名；账户显示名才可以由用户随便取。",
+				"- Aster 创建时应向用户收集：主钱包地址、API Pro 代理钱包地址、API Pro 代理钱包私钥。即使历史对话里出现过 Aster User / 用户名，也必须纠正为主钱包地址。",
 				"- 关键字段：" + strings.Join(fields, "、"),
 				"- 支持的交易所类型：" + strings.Join(enumOptionValues("exchange_management", "exchange_type"), "、"),
 			}, "\n")
@@ -67,6 +69,8 @@ func buildSkillDomainPrimer(lang, skillName string) string {
 			"### Exchange Config Domain Guard",
 			"- The current domain is exchange account configuration, not AI model configuration.",
 			"- exchange_type means the trading venue. Do not use provider to mean an exchange.",
+			"- For Aster, aster_user means the main wallet address, not a username and not the arbitrary account display name.",
+			"- For Aster create, collect: main wallet address, API Pro wallet address, and API Pro wallet private key. If earlier dialogue says Aster User/username, correct it to main wallet address.",
 			"- Key fields: " + strings.Join(fields, ", "),
 			"- Supported exchange types: " + strings.Join(enumOptionValues("exchange_management", "exchange_type"), ", "),
 		}, "\n")
