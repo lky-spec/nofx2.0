@@ -55,7 +55,7 @@
     "aster_user": {
       "type": "credential",
       "required_for": ["aster"],
-      "description": "Aster 主钱包地址：用户登录 Aster、持有交易资金的 EVM 钱包地址。不是用户名。Aster 账户启用前必须填写。"
+      "description": "Aster 主钱包地址：用户登录 Aster、持有交易资金的 EVM 钱包地址。Aster 账户启用前必须填写。"
     },
     "aster_signer": {
       "type": "credential",
@@ -98,7 +98,7 @@
     "Hyperliquid 创建/更新时应与手动页面保持一致：至少收集 api_key + hyperliquid_wallet_addr。",
     "Hyperliquid 账户启用前必须填写 hyperliquid_wallet_addr。",
     "若用户使用 Hyperliquid unified account 模式，应明确记录 hyperliquid_unified_account 开关状态。",
-    "Aster 账户启用前必须填写 aster_user、aster_signer、aster_private_key 三个字段；对用户解释时必须说成主钱包地址、API Pro 代理钱包地址、API Pro 代理钱包私钥，不能说成 Aster 用户名。",
+    "Aster 账户启用前必须填写 aster_user、aster_signer、aster_private_key 三个字段；对用户解释时使用主钱包地址、API Pro 代理钱包地址、API Pro 代理钱包私钥三个页面字段名。",
     "Lighter 账户启用前必须填写 lighter_wallet_addr + lighter_api_key_private_key；若当前账户模式还依赖 lighter_private_key，也要先补齐后再启用。",
     "lighter_api_key_index 超出 0～255 时自动收敛到边界值并告知用户。",
     "删除操作不可逆，必须先向用户确认再执行。"

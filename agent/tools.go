@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -92,7 +93,7 @@ func plannerToolNamesForDomain(domain string) []string {
 	case "exchange":
 		return []string{"get_exchange_configs", "manage_exchange_config"}
 	case "strategy":
-		return []string{"get_strategies", "manage_strategy"}
+		return []string{"get_strategies", "manage_strategy", "preview_strategy_prompt", "test_strategy_run"}
 	case "diagnosis":
 		return []string{"get_decisions", "get_backend_logs", "get_model_configs", "get_exchange_configs", "get_strategies", "manage_trader"}
 	default:
@@ -137,11 +138,11 @@ func toolsByName(names []string, compactStrategy bool) []mcp.Tool {
 }
 
 func compactManageStrategyTool(tool mcp.Tool) mcp.Tool {
-	tool.Function.Description = "List, query, delete, activate, duplicate, create, or update strategy templates. Planning schema is compact; use action plus strategy_id/name/description/lang/is_public/config_visible, and include config only when the user explicitly provides strategy config fields."
+	tool.Function.Description = "List, query, export, import, delete, activate, duplicate, create, or update strategy templates. Planning schema is compact; use action plus strategy_id/name/description/lang/is_public/config_visible, and include config only when the user explicitly provides strategy config fields."
 	tool.Function.Parameters = map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"action":         map[string]any{"type": "string", "enum": []string{"list", "create", "update", "delete", "activate", "duplicate", "get_default_config"}},
+			"action":         map[string]any{"type": "string", "enum": []string{"list", "create", "update", "delete", "activate", "duplicate", "import", "export", "get_default_config"}},
 			"strategy_id":    map[string]any{"type": "string"},
 			"name":           map[string]any{"type": "string"},
 			"description":    map[string]any{"type": "string"},
@@ -623,13 +624,13 @@ func buildAgentTools() []mcp.Tool {
 			Type: "function",
 			Function: mcp.FunctionDef{
 				Name:        "manage_strategy",
-				Description: "List, create, update, delete, activate, duplicate strategies, or get the default strategy config template. Use this when the user asks to create or edit a strategy template. Prefer passing precise field-level config patches in `config` instead of vague natural-language summaries.",
+				Description: "List, create, update, delete, activate, duplicate, import, export strategies, or get the default strategy config template. Use this when the user asks to create or edit a strategy template. Prefer passing precise field-level config patches in `config` instead of vague natural-language summaries.",
 				Parameters: map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"action": map[string]any{
 							"type": "string",
-							"enum": []string{"list", "create", "update", "delete", "activate", "duplicate", "get_default_config"},
+							"enum": []string{"list", "create", "update", "delete", "activate", "duplicate", "import", "export", "get_default_config"},
 						},
 						"strategy_id":    map[string]any{"type": "string"},
 						"name":           map[string]any{"type": "string"},
@@ -637,9 +638,50 @@ func buildAgentTools() []mcp.Tool {
 						"lang":           map[string]any{"type": "string", "enum": []string{"zh", "en"}},
 						"is_public":      map[string]any{"type": "boolean"},
 						"config_visible": map[string]any{"type": "boolean"},
-						"config":         strategyConfigSchema(),
+						"confirmation_token": map[string]any{
+							"type":        "string",
+							"description": "Required for confirming a pending strategy import. Returned by the first import call that asks for confirmation.",
+						},
+						"config": strategyConfigSchema(),
 					},
 					"required": []string{"action"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: mcp.FunctionDef{
+				Name:        "preview_strategy_prompt",
+				Description: "Preview the generated system prompt for a strategy config, matching the Strategy Studio prompt preview. Use this when the user asks what prompt a strategy will send to the model.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"strategy_id":    map[string]any{"type": "string", "description": "Existing strategy id to preview."},
+						"config":         strategyConfigSchema(),
+						"account_equity": map[string]any{"type": "number", "description": "Simulated account equity. Defaults to 1000."},
+						"prompt_variant": map[string]any{"type": "string", "description": "Prompt variant. Defaults to balanced."},
+					},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: mcp.FunctionDef{
+				Name:        "test_strategy_run",
+				Description: "Build a Strategy Studio-style dry test run for a strategy. It returns generated prompts and candidate metadata; it does not execute trades.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"strategy_id":    map[string]any{"type": "string", "description": "Existing strategy id to test."},
+						"config":         strategyConfigSchema(),
+						"prompt_variant": map[string]any{"type": "string", "description": "Prompt variant. Defaults to balanced."},
+						"run_real_ai":    map[string]any{"type": "boolean", "description": "When true, request a real AI call. The agent currently keeps this false unless the user explicitly asks."},
+						"ai_model_id":    map[string]any{"type": "string", "description": "AI model id for a real AI call."},
+						"include_candidates": map[string]any{
+							"type":        "boolean",
+							"description": "When true, fetch candidate coins from the strategy engine. Defaults to false so dry runs do not hit external market/ranking APIs.",
+						},
+					},
 				},
 			},
 		},
@@ -889,7 +931,11 @@ func (a *Agent) handleToolCall(ctx context.Context, storeUserID string, userID i
 	case "get_strategies":
 		return a.toolGetStrategies(storeUserID)
 	case "manage_strategy":
-		return a.toolManageStrategy(storeUserID, tc.Function.Arguments)
+		return a.toolManageStrategyForUser(storeUserID, userID, tc.Function.Arguments)
+	case "preview_strategy_prompt":
+		return a.toolPreviewStrategyPrompt(storeUserID, tc.Function.Arguments)
+	case "test_strategy_run":
+		return a.toolTestStrategyRun(storeUserID, tc.Function.Arguments)
 	case "manage_trader":
 		return a.toolManageTrader(storeUserID, tc.Function.Arguments)
 	case "search_stock":
@@ -983,6 +1029,7 @@ var sensitiveToolKeys = map[string]struct{}{
 	"passphrase":                  {},
 	"private_key":                 {},
 	"password_hash":               {},
+	"nofxos_api_key":              {},
 	"lighter_api_key_private_key": {},
 }
 
@@ -991,7 +1038,7 @@ func stripSensitiveToolFields(value any) any {
 	case map[string]any:
 		cleaned := make(map[string]any, len(typed))
 		for key, inner := range typed {
-			if _, blocked := sensitiveToolKeys[strings.ToLower(strings.TrimSpace(key))]; blocked {
+			if isSensitiveToolFieldKey(key) {
 				continue
 			}
 			cleaned[key] = stripSensitiveToolFields(inner)
@@ -1006,6 +1053,24 @@ func stripSensitiveToolFields(value any) any {
 	default:
 		return value
 	}
+}
+
+func isSensitiveToolFieldKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	if key == "" {
+		return false
+	}
+	switch key {
+	case "hyperliquid_wallet_addr", "aster_user", "aster_signer", "lighter_wallet_addr":
+		return false
+	}
+	if _, blocked := sensitiveToolKeys[key]; blocked {
+		return true
+	}
+	if spec, ok := productFieldCatalog[key]; ok && spec.Sensitive {
+		return true
+	}
+	return false
 }
 
 type manageTraderArgs struct {
@@ -1187,7 +1252,11 @@ func safeStrategyForTool(strategy *store.Strategy) safeStrategyToolConfig {
 	if out.HasConfig {
 		var cfg map[string]any
 		if err := json.Unmarshal([]byte(strategy.Config), &cfg); err == nil {
-			out.Config = cfg
+			if cleaned, ok := stripSensitiveToolFields(cfg).(map[string]any); ok {
+				out.Config = cleaned
+			} else {
+				out.Config = cfg
+			}
 		}
 	}
 	return out
@@ -1944,21 +2013,225 @@ func (a *Agent) toolGetStrategies(storeUserID string) string {
 	return string(result)
 }
 
+type pendingStrategyImportConfirmation struct {
+	UserID        int64          `json:"user_id"`
+	StoreUserID   string         `json:"store_user_id"`
+	Name          string         `json:"name"`
+	Description   string         `json:"description,omitempty"`
+	Lang          string         `json:"lang,omitempty"`
+	IsPublic      bool           `json:"is_public"`
+	ConfigVisible bool           `json:"config_visible"`
+	Config        map[string]any `json:"config"`
+	Fingerprint   string         `json:"fingerprint"`
+	Token         string         `json:"token"`
+	UpdatedAt     string         `json:"updated_at"`
+}
+
+func pendingStrategyImportConfirmationKey(userID int64) string {
+	return fmt.Sprintf("agent_pending_strategy_import_%d", userID)
+}
+
+func strategyImportFingerprint(storeUserID, name, description, lang string, isPublic, configVisible bool, config map[string]any) string {
+	payload, _ := json.Marshal(map[string]any{
+		"store_user_id":  strings.TrimSpace(storeUserID),
+		"name":           strings.TrimSpace(name),
+		"description":    strings.TrimSpace(description),
+		"lang":           strings.TrimSpace(lang),
+		"is_public":      isPublic,
+		"config_visible": configVisible,
+		"config":         config,
+	})
+	sum := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func strategyImportConfirmationToken(fingerprint string) string {
+	seed := fmt.Sprintf("%s:%d", strings.TrimSpace(fingerprint), time.Now().UnixNano())
+	sum := sha256.Sum256([]byte(seed))
+	return fmt.Sprintf("imp_%x", sum[:6])
+}
+
+func (a *Agent) savePendingStrategyImportConfirmation(userID int64, pending pendingStrategyImportConfirmation) error {
+	if a.store == nil {
+		return fmt.Errorf("store unavailable")
+	}
+	pending.UserID = userID
+	pending.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	data, err := json.Marshal(pending)
+	if err != nil {
+		return err
+	}
+	return a.store.SetSystemConfig(pendingStrategyImportConfirmationKey(userID), string(data))
+}
+
+func (a *Agent) loadPendingStrategyImportConfirmation(userID int64) (pendingStrategyImportConfirmation, bool) {
+	if a.store == nil {
+		return pendingStrategyImportConfirmation{}, false
+	}
+	raw, err := a.store.GetSystemConfig(pendingStrategyImportConfirmationKey(userID))
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return pendingStrategyImportConfirmation{}, false
+	}
+	var pending pendingStrategyImportConfirmation
+	if err := json.Unmarshal([]byte(raw), &pending); err != nil {
+		return pendingStrategyImportConfirmation{}, false
+	}
+	if strings.TrimSpace(pending.Token) == "" || strings.TrimSpace(pending.Fingerprint) == "" {
+		return pendingStrategyImportConfirmation{}, false
+	}
+	return pending, true
+}
+
+func (a *Agent) clearPendingStrategyImportConfirmation(userID int64) {
+	if a.store == nil {
+		return
+	}
+	_ = a.store.SetSystemConfig(pendingStrategyImportConfirmationKey(userID), "")
+}
+
+func (a *Agent) strategyConfigFromToolArgs(storeUserID, argsJSON string) (store.StrategyConfig, string, error) {
+	var args struct {
+		StrategyID string         `json:"strategy_id"`
+		Config     map[string]any `json:"config"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return store.StrategyConfig{}, "", fmt.Errorf("invalid arguments: %w", err)
+	}
+	strategyID := strings.TrimSpace(args.StrategyID)
+	if strategyID != "" {
+		if a.store == nil {
+			return store.StrategyConfig{}, "", fmt.Errorf("store unavailable")
+		}
+		strategy, err := a.store.Strategy().Get(storeUserID, strategyID)
+		if err != nil {
+			return store.StrategyConfig{}, "", fmt.Errorf("failed to load strategy: %w", err)
+		}
+		cfg := store.GetDefaultStrategyConfig("zh")
+		if strings.TrimSpace(strategy.Config) != "" {
+			if err := json.Unmarshal([]byte(strategy.Config), &cfg); err != nil {
+				return store.StrategyConfig{}, "", fmt.Errorf("invalid strategy config: %w", err)
+			}
+		}
+		if len(args.Config) > 0 {
+			merged, err := store.MergeStrategyConfig(cfg, args.Config)
+			if err != nil {
+				return store.StrategyConfig{}, "", err
+			}
+			cfg = merged
+		}
+		cfg.ClampLimits()
+		return cfg, strategyID, nil
+	}
+	if len(args.Config) > 0 {
+		base := store.GetDefaultStrategyConfig("zh")
+		merged, err := store.MergeStrategyConfig(base, args.Config)
+		if err != nil {
+			return store.StrategyConfig{}, "", err
+		}
+		merged.ClampLimits()
+		return merged, "", nil
+	}
+	return store.StrategyConfig{}, "", fmt.Errorf("strategy_id or config is required")
+}
+
+func (a *Agent) toolPreviewStrategyPrompt(storeUserID, argsJSON string) string {
+	var args struct {
+		AccountEquity float64 `json:"account_equity"`
+		PromptVariant string  `json:"prompt_variant"`
+	}
+	_ = json.Unmarshal([]byte(argsJSON), &args)
+	cfg, strategyID, err := a.strategyConfigFromToolArgs(storeUserID, argsJSON)
+	if err != nil {
+		return fmt.Sprintf(`{"error":"%s"}`, err)
+	}
+	if args.AccountEquity <= 0 {
+		args.AccountEquity = 1000
+	}
+	args.PromptVariant = defaultIfEmpty(strings.TrimSpace(args.PromptVariant), "balanced")
+	engine := kernel.NewStrategyEngine(&cfg)
+	systemPrompt := engine.BuildSystemPrompt(args.AccountEquity, args.PromptVariant)
+	summary := map[string]any{
+		"strategy_type":     cfg.StrategyType,
+		"coin_source":       cfg.CoinSource.SourceType,
+		"primary_timeframe": cfg.Indicators.Klines.PrimaryTimeframe,
+		"btc_eth_leverage":  cfg.RiskControl.BTCETHMaxLeverage,
+		"altcoin_leverage":  cfg.RiskControl.AltcoinMaxLeverage,
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"status":         "ok",
+		"strategy_id":    strategyID,
+		"prompt_variant": args.PromptVariant,
+		"system_prompt":  systemPrompt,
+		"config_summary": summary,
+	})
+	return string(raw)
+}
+
+func (a *Agent) toolTestStrategyRun(storeUserID, argsJSON string) string {
+	var args struct {
+		PromptVariant     string `json:"prompt_variant"`
+		RunRealAI         bool   `json:"run_real_ai"`
+		AIModelID         string `json:"ai_model_id"`
+		IncludeCandidates bool   `json:"include_candidates"`
+	}
+	_ = json.Unmarshal([]byte(argsJSON), &args)
+	cfg, strategyID, err := a.strategyConfigFromToolArgs(storeUserID, argsJSON)
+	if err != nil {
+		return fmt.Sprintf(`{"error":"%s"}`, err)
+	}
+	args.PromptVariant = defaultIfEmpty(strings.TrimSpace(args.PromptVariant), "balanced")
+	if args.RunRealAI {
+		return `{"error":"real AI strategy test-run is only available through the Strategy Studio page for now; this agent tool provides a dry run and prompt preview without executing trades"}`
+	}
+	engine := kernel.NewStrategyEngine(&cfg)
+	candidates := []kernel.CandidateCoin{}
+	candidateLookup := "skipped"
+	var candErr error
+	if args.IncludeCandidates {
+		candidateLookup = "fetched"
+		candidates, candErr = engine.GetCandidateCoins()
+	}
+	candidateCount := len(candidates)
+	candidateErr := ""
+	if candErr != nil {
+		candidateErr = candErr.Error()
+	}
+	systemPrompt := engine.BuildSystemPrompt(1000, args.PromptVariant)
+	raw, _ := json.Marshal(map[string]any{
+		"status":           "ok",
+		"mode":             "dry_run",
+		"strategy_id":      strategyID,
+		"prompt_variant":   args.PromptVariant,
+		"candidate_lookup": candidateLookup,
+		"candidate_count":  candidateCount,
+		"candidate_error":  candidateErr,
+		"candidates":       candidates,
+		"system_prompt":    systemPrompt,
+		"note":             "Dry run only. No trade was executed and no real AI call was made.",
+	})
+	return string(raw)
+}
+
 func (a *Agent) toolManageStrategy(storeUserID, argsJSON string) string {
+	return a.toolManageStrategyForUser(storeUserID, 0, argsJSON)
+}
+
+func (a *Agent) toolManageStrategyForUser(storeUserID string, userID int64, argsJSON string) string {
 	if a.store == nil {
 		return `{"error":"store unavailable"}`
 	}
 	var args struct {
-		Action        string         `json:"action"`
-		StrategyID    string         `json:"strategy_id"`
-		Name          string         `json:"name"`
-		Description   string         `json:"description"`
-		Lang          string         `json:"lang"`
-		IsPublic      *bool          `json:"is_public"`
-		ConfigVisible *bool          `json:"config_visible"`
-		AllowClamped  bool           `json:"allow_clamped_update"`
-		Confirmed     bool           `json:"confirmed"`
-		Config        map[string]any `json:"config"`
+		Action            string         `json:"action"`
+		StrategyID        string         `json:"strategy_id"`
+		Name              string         `json:"name"`
+		Description       string         `json:"description"`
+		Lang              string         `json:"lang"`
+		IsPublic          *bool          `json:"is_public"`
+		ConfigVisible     *bool          `json:"config_visible"`
+		AllowClamped      bool           `json:"allow_clamped_update"`
+		Confirmed         bool           `json:"confirmed"`
+		ConfirmationToken string         `json:"confirmation_token"`
+		Config            map[string]any `json:"config"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return fmt.Sprintf(`{"error":"invalid arguments: %s"}`, err)
@@ -1977,6 +2250,126 @@ func (a *Agent) toolManageStrategy(storeUserID, argsJSON string) string {
 			"status": "ok",
 			"action": "get_default_config",
 			"config": cfg,
+		})
+		return string(payload)
+	case "export":
+		strategyID := strings.TrimSpace(args.StrategyID)
+		if strategyID == "" {
+			return `{"error":"strategy_id is required for export"}`
+		}
+		strategy, err := a.store.Strategy().Get(storeUserID, strategyID)
+		if err != nil {
+			return fmt.Sprintf(`{"error":"failed to load strategy: %s"}`, err)
+		}
+		if !store.IsVisibleStrategy(strategy) {
+			return `{"error":"strategy is not visible to this user"}`
+		}
+		safeStrategy := safeStrategyForTool(strategy)
+		payload, _ := json.Marshal(map[string]any{
+			"status":      "ok",
+			"action":      "export",
+			"exported_at": time.Now().UTC().Format(time.RFC3339),
+			"strategy":    safeStrategy,
+			"note":        "Sensitive fields are redacted from agent export output.",
+		})
+		return string(payload)
+	case "import":
+		name := strings.TrimSpace(args.Name)
+		if name == "" {
+			return `{"error":"name is required for import"}`
+		}
+		if len(args.Config) == 0 {
+			return `{"error":"config is required for import"}`
+		}
+		configForImport := args.Config
+		if cleaned, ok := stripSensitiveToolFields(args.Config).(map[string]any); ok {
+			configForImport = cleaned
+		}
+		if lockedField, ok := strategyConfigContainsLockedField(configForImport); ok {
+			return fmt.Sprintf(`{"error":"%s"}`, strategyLockedFieldError("zh", lockedField))
+		}
+		isPublic := args.IsPublic != nil && *args.IsPublic
+		configVisible := args.ConfigVisible == nil || *args.ConfigVisible
+		fingerprint := strategyImportFingerprint(storeUserID, name, args.Description, args.Lang, isPublic, configVisible, configForImport)
+		if !args.Confirmed {
+			token := strategyImportConfirmationToken(fingerprint)
+			pending := pendingStrategyImportConfirmation{
+				StoreUserID:   strings.TrimSpace(storeUserID),
+				Name:          name,
+				Description:   strings.TrimSpace(args.Description),
+				Lang:          strings.TrimSpace(args.Lang),
+				IsPublic:      isPublic,
+				ConfigVisible: configVisible,
+				Config:        configForImport,
+				Fingerprint:   fingerprint,
+				Token:         token,
+			}
+			if err := a.savePendingStrategyImportConfirmation(userID, pending); err != nil {
+				return fmt.Sprintf(`{"error":"failed to save pending import confirmation: %s"}`, err)
+			}
+			payload, _ := json.Marshal(map[string]any{
+				"error":                 "strategy import requires confirmation with the returned confirmation_token before execution. Present the imported strategy config summary to the user and ask them to reply 确认导入 plus this token; do not claim the strategy was imported.",
+				"requires_confirmation": true,
+				"confirmation_token":    token,
+				"pending_import": map[string]any{
+					"name":           name,
+					"description":    strings.TrimSpace(args.Description),
+					"lang":           strings.TrimSpace(args.Lang),
+					"is_public":      isPublic,
+					"config_visible": configVisible,
+					"config":         configForImport,
+				},
+			})
+			return string(payload)
+		}
+		pending, ok := a.loadPendingStrategyImportConfirmation(userID)
+		if !ok {
+			return `{"error":"strategy import confirmation is not pending. Start import first, present the summary to the user, then confirm with the returned confirmation_token.","requires_confirmation":true}`
+		}
+		if strings.TrimSpace(args.ConfirmationToken) == "" || strings.TrimSpace(args.ConfirmationToken) != strings.TrimSpace(pending.Token) {
+			return `{"error":"strategy import confirmation_token is missing or invalid. Ask the user to confirm using the token from the pending import summary.","requires_confirmation":true}`
+		}
+		if fingerprint != pending.Fingerprint {
+			return `{"error":"strategy import payload changed after confirmation was requested. Restart import and ask for confirmation again.","requires_confirmation":true}`
+		}
+		if err := a.ensureUniqueStrategyName(storeUserID, name, ""); err != nil {
+			return fmt.Sprintf(`{"error":"%s"}`, err)
+		}
+		defaultConfig := store.GetDefaultStrategyConfig(strings.TrimSpace(args.Lang))
+		merged, err := store.MergeStrategyConfig(defaultConfig, configForImport)
+		if err != nil {
+			return fmt.Sprintf(`{"error":"invalid strategy config: %s"}`, err)
+		}
+		before := merged
+		merged.ClampLimits()
+		warnings := store.StrategyClampWarnings(before, merged, merged.Language)
+		if len(warnings) > 0 && !args.AllowClamped {
+			return fmt.Sprintf(`{"error":"%s"}`, formatRiskControlRefusalPrompt(merged.Language, warnings, "确认导入"))
+		}
+		configJSON, err := json.Marshal(merged)
+		if err != nil {
+			return fmt.Sprintf(`{"error":"failed to serialize strategy config: %s"}`, err)
+		}
+		record := &store.Strategy{
+			ID:            fmt.Sprintf("strategy_%d", time.Now().UnixNano()),
+			UserID:        storeUserID,
+			Name:          name,
+			Description:   strings.TrimSpace(args.Description),
+			IsActive:      false,
+			IsDefault:     false,
+			IsPublic:      isPublic,
+			ConfigVisible: configVisible,
+			Config:        string(configJSON),
+		}
+		if err := a.store.Strategy().Create(record); err != nil {
+			return fmt.Sprintf(`{"error":"failed to import strategy: %s"}`, err)
+		}
+		a.clearPendingStrategyImportConfirmation(userID)
+		payload, _ := json.Marshal(map[string]any{
+			"status":   "ok",
+			"action":   "import",
+			"strategy": safeStrategyForTool(record),
+			"warnings": warnings,
 		})
 		return string(payload)
 	case "create":

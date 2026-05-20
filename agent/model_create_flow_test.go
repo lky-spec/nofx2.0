@@ -20,14 +20,12 @@ func TestHandleModelCreateSkillAsksProviderFirstWithClaw402Recommendation(t *tes
 	reply := a.handleModelCreateSkill("default", 42, "zh", "请帮我创建一个模型", skillSession{})
 
 	for _, want := range []string{
-		"还缺这些字段：模型提供商",
-		"可选模型 provider",
-		"推荐 `claw402`",
-		"并列可选",
+		"先选模型供应商",
+		"可选：",
+		"claw402",
+		"[推荐]",
 		"按次付费",
-		"Base USDC 钱包支付",
-		"直接创建 Base 钱包",
-		"直接扫码充值/支付",
+		"Base USDC 钱包",
 	} {
 		if !strings.Contains(reply, want) {
 			t.Fatalf("expected reply to contain %q, got: %s", want, reply)

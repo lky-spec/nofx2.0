@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"nofx/safe"
-	"strings"
 	"sync"
 	"time"
 )
@@ -116,9 +115,6 @@ func (b *Brain) scanNews(seen map[string]bool, seenOrder *[]string) {
 		return
 	}
 
-	bullish := []string{"surge", "rally", "bullish", "breakout", "ath", "pump", "adoption"}
-	bearish := []string{"crash", "dump", "bearish", "sell-off", "plunge", "hack", "ban", "fraud"}
-
 	for _, d := range result.Data {
 		if seen[d.URL] {
 			continue
@@ -129,36 +125,8 @@ func (b *Brain) scanNews(seen map[string]bool, seenOrder *[]string) {
 			continue
 		}
 
-		lower := strings.ToLower(d.Title + " " + d.Body)
-		bc, brc := 0, 0
-		for _, w := range bullish {
-			if strings.Contains(lower, w) {
-				bc++
-			}
-		}
-		for _, w := range bearish {
-			if strings.Contains(lower, w) {
-				brc++
-			}
-		}
-
-		if bc == 0 && brc == 0 {
-			continue
-		}
-
-		emoji := "📰"
-		sentiment := "NEUTRAL"
-		if bc > brc {
-			emoji = "🟢"
-			sentiment = "BULLISH"
-		}
-		if brc > bc {
-			emoji = "🔴"
-			sentiment = "BEARISH"
-		}
-
-		b.agent.notifyAll(fmt.Sprintf("%s *News*\n\n%s\n\n• Source: %s\n• Sentiment: %s",
-			emoji, d.Title, d.Source, sentiment))
+		b.agent.notifyAll(fmt.Sprintf("📰 *News*\n\n%s\n\n• Source: %s\n• Impact: needs LLM/context review before trading decisions",
+			d.Title, d.Source))
 	}
 
 	// Evict the oldest half when seen grows large so recent URLs stay deduped deterministically.

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"strings"
@@ -75,6 +76,25 @@ func TestAIServiceFailureHighlightsBannedAccountAuthFailure(t *testing.T) {
 	for _, unexpected := range []string{"余额不足", "超时"} {
 		if strings.Contains(msg, unexpected) {
 			t.Fatalf("banned account auth failure should not mention %q: %s", unexpected, msg)
+		}
+	}
+}
+
+func TestPlannerFailureResponseSkipsDirectAnswerOnAIServiceFailure(t *testing.T) {
+	client := &staticAIClient{response: `{"action":"direct_answer","answer":"不该走到这里"}`}
+	a := New(nil, nil, DefaultConfig(), slog.Default())
+	a.SetAIClient(client)
+
+	msg, err := a.plannerFailureResponse(context.Background(), 123, "zh", "你好", errors.New(`API returned error (status 401): {"error":{"type":"authentication_error","message":"invalid api key"}}`), nil)
+	if err != nil {
+		t.Fatalf("plannerFailureResponse returned error: %v", err)
+	}
+	if client.lastRequest != nil {
+		t.Fatalf("expected direct-answer LLM call to be skipped for AI service failure")
+	}
+	for _, want := range []string{"当前 AI 服务调用失败", "鉴权失败"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("expected message to contain %q, got: %s", want, msg)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -246,6 +247,125 @@ func TestToolManageStrategyRejectsFixedMinPositionSizeUpdates(t *testing.T) {
 	}
 }
 
+func TestToolManageStrategyExportRedactsSensitiveConfig(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "strategy-export-redacts.db")
+	st, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	a := New(nil, st, DefaultConfig(), slog.Default())
+
+	cfg := store.GetDefaultStrategyConfig("zh")
+	cfg.Indicators.NofxOSAPIKey = "cm_secret_export_key"
+	rawCfg, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal strategy config: %v", err)
+	}
+	if err := st.Strategy().Create(&store.Strategy{
+		ID:            "strategy-export-redacts",
+		UserID:        "default",
+		Name:          "导出脱敏策略",
+		ConfigVisible: true,
+		Config:        string(rawCfg),
+	}); err != nil {
+		t.Fatalf("create strategy: %v", err)
+	}
+
+	resp := a.toolManageStrategy("default", `{"action":"export","strategy_id":"strategy-export-redacts"}`)
+	if strings.Contains(resp, "cm_secret_export_key") {
+		t.Fatalf("expected export to redact nofxos api key, got: %s", resp)
+	}
+	if !strings.Contains(resp, `"action":"export"`) {
+		t.Fatalf("expected export response, got: %s", resp)
+	}
+}
+
+func TestStripSensitiveToolFieldsUsesProductFieldCatalog(t *testing.T) {
+	input := map[string]any{
+		"api_key":           "classic-secret",
+		"aster_private_key": "catalog-secret",
+		"nested": map[string]any{
+			"lighter_private_key": "nested-secret",
+			"safe":                "visible",
+		},
+		"safe": "visible",
+	}
+	cleaned, ok := stripSensitiveToolFields(input).(map[string]any)
+	if !ok {
+		t.Fatalf("expected cleaned map")
+	}
+	if _, ok := cleaned["api_key"]; ok {
+		t.Fatalf("expected api_key to be stripped: %#v", cleaned)
+	}
+	if _, ok := cleaned["aster_private_key"]; ok {
+		t.Fatalf("expected catalog-sensitive aster_private_key to be stripped: %#v", cleaned)
+	}
+	nested, ok := cleaned["nested"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected nested map: %#v", cleaned["nested"])
+	}
+	if _, ok := nested["lighter_private_key"]; ok {
+		t.Fatalf("expected catalog-sensitive nested private key to be stripped: %#v", nested)
+	}
+	if cleaned["safe"] != "visible" || nested["safe"] != "visible" {
+		t.Fatalf("expected non-sensitive fields to remain, got: %#v", cleaned)
+	}
+}
+
+func TestToolManageStrategyImportRequiresConfirmation(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "strategy-import-confirmation.db")
+	st, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	a := New(nil, st, DefaultConfig(), slog.Default())
+
+	const userID int64 = 42
+	importArgs := `{"action":"import","name":"确认导入","config":{"strategy_type":"ai_trading","coin_source":{"source_type":"ai500","ai500_limit":3}}}`
+	resp := a.toolManageStrategyForUser("default", userID, importArgs)
+	if !strings.Contains(resp, "requires_confirmation") {
+		t.Fatalf("expected import to require confirmation, got: %s", resp)
+	}
+	var pendingResp struct {
+		ConfirmationToken string `json:"confirmation_token"`
+	}
+	if err := json.Unmarshal([]byte(resp), &pendingResp); err != nil {
+		t.Fatalf("parse pending import response: %v\n%s", err, resp)
+	}
+	if pendingResp.ConfirmationToken == "" {
+		t.Fatalf("expected confirmation token in pending import response: %s", resp)
+	}
+	resp = a.toolManageStrategyForUser("default", userID, `{"action":"import","name":"确认导入","confirmed":true,"config":{"strategy_type":"ai_trading","coin_source":{"source_type":"ai500","ai500_limit":3}}}`)
+	if !strings.Contains(resp, "confirmation_token") {
+		t.Fatalf("expected confirmed import without token to be rejected, got: %s", resp)
+	}
+	resp = a.toolManageStrategyForUser("default", userID, `{"action":"import","name":"确认导入","confirmed":true,"confirmation_token":"`+pendingResp.ConfirmationToken+`","config":{"strategy_type":"ai_trading","coin_source":{"source_type":"ai500","ai500_limit":3}}}`)
+	if strings.Contains(resp, `"error"`) {
+		t.Fatalf("expected confirmed import to succeed, got: %s", resp)
+	}
+	strategies, err := st.Strategy().List("default")
+	if err != nil {
+		t.Fatalf("list strategies: %v", err)
+	}
+	var strategy *store.Strategy
+	for _, candidate := range strategies {
+		if candidate.Name == "确认导入" {
+			strategy = candidate
+			break
+		}
+	}
+	if strategy == nil {
+		t.Fatalf("expected imported strategy to exist")
+	}
+	parsed, err := strategy.ParseConfig()
+	if err != nil {
+		t.Fatalf("parse imported config: %v", err)
+	}
+	if parsed.StrategyType != "ai_trading" || parsed.CoinSource.AI500Limit != 3 {
+		t.Fatalf("expected imported ai strategy config, got %+v", parsed)
+	}
+}
+
 func TestExchangeSkillOptionSummaryMatchesManualPage(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "exchange-options.db")
 	st, err := store.New(dbPath)
@@ -376,6 +496,96 @@ func TestExchangeCreateAsterMissingPromptUsesFrontendFieldLabels(t *testing.T) {
 	for _, unexpected := range []string{"Aster User", "用户名", "API Key", "Secret"} {
 		if strings.Contains(reply, unexpected) {
 			t.Fatalf("Aster prompt should not contain %q, got: %s", unexpected, reply)
+		}
+	}
+}
+
+func TestExchangeCreateMissingFieldsAreDynamicForDexVenues(t *testing.T) {
+	session := skillSession{
+		Name:   "exchange_management",
+		Action: "create",
+		Fields: map[string]string{
+			"exchange_type": "aster",
+			"account_name":  "我的Aster主账户",
+		},
+	}
+
+	missing := missingFieldKeysForSkillSession(session)
+	for _, want := range []string{"aster_user", "aster_signer", "aster_private_key"} {
+		if !containsString(missing, want) {
+			t.Fatalf("expected missing Aster field %q, got %v", want, missing)
+		}
+	}
+	for _, unexpected := range []string{"api_key", "secret_key", "passphrase"} {
+		if containsString(missing, unexpected) {
+			t.Fatalf("Aster create should not require CEX field %q, got %v", unexpected, missing)
+		}
+	}
+}
+
+func TestExchangeProductCatalogMatchesStoreCredentialRequirements(t *testing.T) {
+	for _, spec := range exchangeProductCatalog {
+		got := store.MissingRequiredExchangeCredentialFields(
+			spec.Type,
+			"",
+			"",
+			"",
+			"",
+			"",
+			"",
+			"",
+			"",
+			"",
+		)
+		if !reflect.DeepEqual(got, spec.CredentialFields) {
+			t.Fatalf("credential fields for %s drifted from store validation: catalog=%v store=%v", spec.Type, spec.CredentialFields, got)
+		}
+
+		session := skillSession{
+			Name:   "exchange_management",
+			Action: "create",
+			Fields: map[string]string{
+				"exchange_type": spec.Type,
+			},
+		}
+		wantSessionMissing := append([]string{"account_name"}, spec.CredentialFields...)
+		if got := exchangeCreateMissingFieldKeys(session); !reflect.DeepEqual(got, wantSessionMissing) {
+			t.Fatalf("agent missing fields for %s drifted from catalog: want=%v got=%v", spec.Type, wantSessionMissing, got)
+		}
+	}
+}
+
+func TestLLMExtractionAcceptsDexExchangeFields(t *testing.T) {
+	a := &Agent{}
+	session := skillSession{
+		Name:   "exchange_management",
+		Action: "create",
+		Fields: map[string]string{
+			"exchange_type": "aster",
+			"account_name":  "我的Aster主账户",
+		},
+	}
+
+	a.applyLLMExtractionToSkillSession("default", &session, llmFlowExtractionResult{
+		Intent: "continue",
+		Tasks: []llmFlowExtractionTask{{
+			Skill:  "exchange_management",
+			Action: "create",
+			Fields: map[string]string{
+				"aster_user":        "0xmain",
+				"aster_signer":      "0xsigner",
+				"aster_private_key": "0xprivate",
+			},
+		}},
+	}, "zh", "主钱包 0xmain，代理钱包 0xsigner，私钥 0xprivate")
+
+	for key, want := range map[string]string{
+		"aster_user":        "0xmain",
+		"aster_signer":      "0xsigner",
+		"aster_private_key": "0xprivate",
+	} {
+		if got := fieldValue(session, key); got != want {
+			t.Fatalf("expected %s=%q, got %q", key, want, got)
 		}
 	}
 }
@@ -713,5 +923,75 @@ func TestDescribeStrategyIncludesManualPageSections(t *testing.T) {
 		if strings.Contains(detail, unexpected) {
 			t.Fatalf("expected grid strategy detail not to contain AI field %q, got: %s", unexpected, detail)
 		}
+	}
+}
+
+func TestStrategyConfigFromToolArgsMergesPatchOntoExistingStrategy(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "strategy-preview-existing-base.db")
+	st, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	a := New(nil, st, DefaultConfig(), slog.Default())
+
+	cfg := store.GetDefaultStrategyConfig("zh")
+	cfg.CoinSource.SourceType = "static"
+	cfg.CoinSource.UseAI500 = false
+	cfg.CoinSource.StaticCoins = []string{"ETHUSDT"}
+	cfg.Indicators.Klines.PrimaryTimeframe = "1h"
+	cfg.RiskControl.BTCETHMaxLeverage = 4
+	rawCfg, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal strategy config: %v", err)
+	}
+	if err := st.Strategy().Create(&store.Strategy{
+		ID:            "strategy-preview-existing-base",
+		UserID:        "default",
+		Name:          "Existing Base",
+		ConfigVisible: true,
+		Config:        string(rawCfg),
+	}); err != nil {
+		t.Fatalf("create strategy: %v", err)
+	}
+
+	merged, strategyID, err := a.strategyConfigFromToolArgs("default", `{"strategy_id":"strategy-preview-existing-base","config":{"risk_control":{"btc_eth_max_leverage":7}}}`)
+	if err != nil {
+		t.Fatalf("merge strategy args: %v", err)
+	}
+	if strategyID != "strategy-preview-existing-base" {
+		t.Fatalf("expected strategy id to round trip, got %q", strategyID)
+	}
+	if merged.CoinSource.SourceType != "static" || len(merged.CoinSource.StaticCoins) != 1 || merged.CoinSource.StaticCoins[0] != "ETHUSDT" {
+		t.Fatalf("expected existing coin source to be preserved, got %+v", merged.CoinSource)
+	}
+	if merged.Indicators.Klines.PrimaryTimeframe != "1h" {
+		t.Fatalf("expected existing primary timeframe to be preserved, got %q", merged.Indicators.Klines.PrimaryTimeframe)
+	}
+	if merged.RiskControl.BTCETHMaxLeverage != 7 {
+		t.Fatalf("expected patch to apply leverage 7, got %v", merged.RiskControl.BTCETHMaxLeverage)
+	}
+}
+
+func TestToolTestStrategyRunSkipsCandidateLookupByDefault(t *testing.T) {
+	a := New(nil, nil, DefaultConfig(), slog.Default())
+
+	resp := a.toolTestStrategyRun("default", `{"config":{"strategy_type":"ai_trading"}}`)
+	if strings.Contains(resp, `"error"`) {
+		t.Fatalf("expected dry run to succeed, got: %s", resp)
+	}
+	var payload struct {
+		CandidateLookup string   `json:"candidate_lookup"`
+		CandidateCount  int      `json:"candidate_count"`
+		CandidateError  string   `json:"candidate_error"`
+		Candidates      []string `json:"candidates"`
+	}
+	if err := json.Unmarshal([]byte(resp), &payload); err != nil {
+		t.Fatalf("parse dry run response: %v\n%s", err, resp)
+	}
+	if payload.CandidateLookup != "skipped" {
+		t.Fatalf("expected candidate lookup to be skipped by default, got %q in %s", payload.CandidateLookup, resp)
+	}
+	if payload.CandidateCount != 0 || payload.CandidateError != "" || len(payload.Candidates) != 0 {
+		t.Fatalf("expected no candidates or external lookup error by default, got %+v", payload)
 	}
 }

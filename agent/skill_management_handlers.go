@@ -768,20 +768,69 @@ func strategyCreatePatchHasPath(value any, path ...string) bool {
 func formatStrategyCreateConfigNeeded(lang, missingKind string) string {
 	if lang == "zh" {
 		if missingKind == "strategy_type" {
-			return "先选择策略类型：grid_trading（网格策略）或 ai_trading（AI 策略）。类型确认后我会继续收集对应配置，配置好后再创建。"
+			return "先定策略类型。AI 策略适合让模型根据行情、指标和策略规则判断开平仓；网格策略适合在震荡区间里低买高卖。\n可选：AI 策略 / 网格策略。\n也可以说“你帮我推荐”，我会先按你的目标判断类型。"
 		}
-		if hints := formatStrategyMissingFieldHints(lang, missingKind); hints != "" {
-			return "这份策略模板还没填完整，还缺这些字段。你可以按下面选，也可以直接说“你帮我按稳健/高频/激进来推荐”：\n" + hints
+		if reply := formatStrategyGuidedMissingGroup(lang, missingKind); reply != "" {
+			return reply
 		}
-		return "这份策略模板还没填完整，还缺：" + formatStrategyMissingFieldNames(lang, missingKind) + "。你可以一句话告诉我这些字段，我会继续填模板。"
+		return "我还需要确认：" + formatStrategyMissingFieldNames(lang, missingKind) + "。你可以直接说你的偏好，也可以说“按稳健/标准/进取推荐”。"
 	}
 	if missingKind == "strategy_type" {
-		return "Choose the strategy type first: grid_trading or ai_trading. I will collect the matching config before creating it."
+		return "First choose the strategy type. AI strategies let the model decide entries/exits from market context; grid strategies buy low and sell high inside a range.\nOptions: AI strategy / grid strategy. You can also ask me to recommend."
 	}
-	if hints := formatStrategyMissingFieldHints(lang, missingKind); hints != "" {
-		return "This strategy template is not complete yet. You can choose from these options, or ask me to recommend a conservative/balanced/high-frequency setup:\n" + hints
+	if reply := formatStrategyGuidedMissingGroup(lang, missingKind); reply != "" {
+		return reply
 	}
-	return "This strategy template is not complete yet. Missing: " + formatStrategyMissingFieldNames(lang, missingKind) + ". Tell me these fields in one message and I will keep filling the template."
+	return "I still need: " + formatStrategyMissingFieldNames(lang, missingKind) + ". You can give preferences directly or ask for a conservative/balanced/aggressive recommendation."
+}
+
+func formatStrategyGuidedMissingGroup(lang, missingKind string) string {
+	fields := map[string]bool{}
+	for _, part := range strings.Split(missingKind, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			fields[part] = true
+		}
+	}
+	hasAny := func(keys ...string) bool {
+		for _, key := range keys {
+			if fields[key] {
+				return true
+			}
+		}
+		return false
+	}
+	if hasAny("source_type", "static_coins") {
+		if lang == "zh" {
+			return "先定 AI 策略怎么选币。这里不是越复杂越好，新手一般先选一个来源：\n- AI500：系统榜单里挑，最省心。\n- OI Top：偏活跃/持仓量靠前。\n- OI Low：偏冷门或低持仓，风险和机会都更不稳定。\n- 静态币种：你指定固定币，比如 BTCUSDT、ETHUSDT。\n你选一个；也可以说“按稳健推荐”，我会先填草稿再给你确认。"
+		}
+		return "First choose how the AI strategy selects coins: AI500, OI Top, OI Low, or static symbols. You can also ask me for a conservative recommendation."
+	}
+	if hasAny("primary_timeframe", "selected_timeframes") {
+		if lang == "zh" {
+			return "下一步定观察周期。周期越短越敏感、交易更频繁；周期越长越稳但机会更少。\n常用选择：高频 1m/3m/5m；标准 5m/15m/1h；稳健 15m/1h/4h。\n你可以直接选一组，或说“按稳健/标准/进取推荐”。"
+		}
+		return "Next choose timeframes. Shorter timeframes are more sensitive; longer ones are steadier. Common choices: high-frequency 1m/3m/5m, balanced 5m/15m/1h, conservative 15m/1h/4h."
+	}
+	if hasAny("btceth_max_leverage", "altcoin_max_leverage", "min_confidence", "min_risk_reward_ratio", "trading_frequency", "entry_standards") {
+		if lang == "zh" {
+			return "现在定 AI 策略的交易边界。这里影响的是模型什么时候敢开仓、用多大杠杆、过滤掉多少低质量机会。\n可选风格：稳健（低杠杆、高置信度、少开单）/ 标准（平衡）/ 进取（更敏感但风险更高）。\n你选一种，我会把杠杆、置信度、盈亏比、交易频率和开仓标准填成草稿给你审核。"
+		}
+		return "Now choose the AI trading boundary. Pick conservative, balanced, or aggressive; I will draft leverage, confidence, risk/reward, frequency, and entry standards for review."
+	}
+	if hasAny("symbol", "grid_count", "total_investment", "leverage", "distribution", "use_atr_bounds 或 upper_price/lower_price") {
+		if lang == "zh" {
+			return "现在定网格的核心形状：交易对、投入、杠杆、网格密度和价格范围。\n新手建议先用 BTCUSDT 或 ETHUSDT，低杠杆，ATR 自动边界。你可以选“稳健 BTC 网格”或“ETH 中密度网格”，也可以自己说交易对和资金。"
+		}
+		return "Now set the grid shape: symbol, investment, leverage, grid density, and price bounds. Beginners can choose a conservative BTC grid or ETH medium-density grid."
+	}
+	if hasAny("max_drawdown_pct", "stop_loss_pct", "daily_loss_limit_pct", "use_maker_only") {
+		if lang == "zh" {
+			return "最后定网格保护规则：最大回撤、止损、日亏损限制、是否只挂 Maker。\n新手建议打开 Maker、设置止损和日亏损上限。你也可以说“按稳健网格推荐”。"
+		}
+		return "Finally set grid protection: max drawdown, stop loss, daily loss limit, and maker-only. Beginners should keep maker-only on and use loss limits."
+	}
+	return ""
 }
 
 func formatStrategyMissingFieldHints(lang, missingKind string) string {
@@ -1160,11 +1209,6 @@ func formatStrategyCreateFinalConfirmation(lang string, session skillSession, cf
 				fmt.Sprintf("- 山寨币最大杠杆：%d倍", cfg.RiskControl.AltcoinMaxLeverage),
 				fmt.Sprintf("- 最小置信度：%d", cfg.RiskControl.MinConfidence),
 				fmt.Sprintf("- 最小盈亏比：%.2f", cfg.RiskControl.MinRiskRewardRatio),
-				fmt.Sprintf("- 最大持仓数（System enforced）：%d", cfg.RiskControl.MaxPositions),
-				fmt.Sprintf("- BTC/ETH 单币仓位上限（System enforced）：账户权益 %.2f 倍", cfg.RiskControl.BTCETHMaxPositionValueRatio),
-				fmt.Sprintf("- 山寨币单币仓位上限（System enforced）：账户权益 %.2f 倍", cfg.RiskControl.AltcoinMaxPositionValueRatio),
-				fmt.Sprintf("- 最大保证金使用率（System enforced）：%.0f%%", cfg.RiskControl.MaxMarginUsage*100),
-				fmt.Sprintf("- 最小开仓金额（System enforced）：%.2f USDT", cfg.RiskControl.MinPositionSize),
 				fmt.Sprintf("- 角色定义：%s", compactSummaryText(cfg.PromptSections.RoleDefinition)),
 				fmt.Sprintf("- 交易频率规则：%s", compactSummaryText(cfg.PromptSections.TradingFrequency)),
 				fmt.Sprintf("- 开仓标准：%s", compactSummaryText(cfg.PromptSections.EntryStandards)),
@@ -1285,6 +1329,61 @@ func formatMissingFieldList(lang string, fields []string) string {
 
 func availableModelProvidersMessage(lang string) string {
 	return modelProviderChoicePrompt(lang)
+}
+
+func formatModelCreateMissingPrompt(lang string, session skillSession, missing []string) string {
+	provider := strings.TrimSpace(fieldValue(session, "provider"))
+	if containsString(missing, "provider") {
+		if lang == "zh" {
+			return "先选模型供应商。新手可以选 `claw402`，它走 Base USDC 钱包按次付费；也可以选 DeepSeek、OpenAI、Claude、Gemini、Qwen、Kimi、Grok、MiniMax 这类 API Key 模型。你回复一个 provider 名称就行。\n可选：" + modelProviderSummaryList(lang)
+		}
+		return "First choose the model provider. For beginners, `claw402` is the easiest pay-per-use Base USDC wallet option; API-key providers such as DeepSeek, OpenAI, Claude, Gemini, Qwen, Kimi, Grok, and MiniMax are also available.\nOptions: " + modelProviderSummaryList(lang)
+	}
+	label := modelProviderCredentialLabel(lang, provider)
+	if lang == "zh" {
+		lines := []string{
+			fmt.Sprintf("现在配置 %s。%s", defaultIfEmpty(provider, "这个模型"), modelProviderDetailedGuidance(lang, provider)),
+			fmt.Sprintf("请把%s发给我；模型名称和接口地址可以先用默认值，确认前我会给你看草稿。", label),
+		}
+		return strings.Join(cleanStringList(lines), "\n")
+	}
+	lines := []string{
+		fmt.Sprintf("Now configuring %s. %s", defaultIfEmpty(provider, "this model"), modelProviderDetailedGuidance(lang, provider)),
+		fmt.Sprintf("Send me the %s; model name and API URL can use defaults and I will show a draft before creating it.", label),
+	}
+	return strings.Join(cleanStringList(lines), "\n")
+}
+
+func formatExchangeCreateMissingPrompt(lang string, session skillSession, missing []string) string {
+	exType := strings.ToLower(strings.TrimSpace(fieldValue(session, "exchange_type")))
+	if containsString(missing, "exchange_type") {
+		if lang == "zh" {
+			return "先选交易所类型。CEX 适合 Binance/OKX/Bybit 这种 API Key 接入；链上交易所如 Aster、Hyperliquid、Lighter 需要钱包或代理钱包信息。你回复一个交易所名就行。\n可选：" + supportedExchangeTypeLabels(lang)
+		}
+		return "First choose the exchange type. CEX accounts use API credentials; Aster, Hyperliquid, and Lighter use wallet-style credentials.\nOptions: " + supportedExchangeTypeLabels(lang)
+	}
+	if containsString(missing, "account_name") {
+		if lang == "zh" {
+			return fmt.Sprintf("交易所类型已选 %s。先给这个账户取个显示名，方便以后区分；这个名字可以随便取，比如“主账户”或“Aster 主账户”。", defaultIfEmpty(exType, "当前交易所"))
+		}
+		return fmt.Sprintf("Exchange type is %s. Give this account a display name so you can identify it later; it can be any local name.", defaultIfEmpty(exType, "selected"))
+	}
+	spec, _ := exchangeProductSpecByType(exType)
+	labels := fieldLabels(lang, missing)
+	if lang == "zh" {
+		lines := []string{
+			fmt.Sprintf("现在补 %s 的连接凭证。%s", defaultIfEmpty(spec.DisplayName, exType), defaultIfEmpty(spec.CredentialSummaryZH, "请按页面要求填写凭证。")),
+			"还需要：" + strings.Join(labels, "、") + "。",
+			"这些是敏感信息，我只会用于保存配置，不会在回复里明文展示私钥或密钥内容。",
+		}
+		return strings.Join(lines, "\n")
+	}
+	lines := []string{
+		fmt.Sprintf("Now add credentials for %s. %s", defaultIfEmpty(spec.DisplayName, exType), defaultIfEmpty(spec.CredentialSummaryEN, "Please provide the credentials required by the page.")),
+		"Still needed: " + strings.Join(labels, ", ") + ".",
+		"These are sensitive values; I will save them but will not echo private keys or secrets back in full.",
+	}
+	return strings.Join(lines, "\n")
 }
 
 func inferCreateDisplayName(text string) string {
@@ -2140,40 +2239,11 @@ func (a *Agent) handleExchangeCreateSkill(storeUserID string, userID int64, lang
 	}
 	exType := fieldValue(session, "exchange_type")
 	accountName := fieldValue(session, "account_name")
-	missing := make([]string, 0, 6)
-	if actionRequiresSlot("exchange_management", "create", "exchange_type") && exType == "" {
-		missing = append(missing, slotDisplayName("exchange_type", lang))
-	}
-	if accountName == "" {
-		missing = append(missing, displayCatalogFieldName("account_name", lang))
-	}
-	if exType != "" {
-		for _, field := range store.MissingRequiredExchangeCredentialFields(
-			exType,
-			fieldValue(session, "api_key"),
-			fieldValue(session, "secret_key"),
-			fieldValue(session, "passphrase"),
-			fieldValue(session, "hyperliquid_wallet_addr"),
-			fieldValue(session, "aster_user"),
-			fieldValue(session, "aster_signer"),
-			fieldValue(session, "aster_private_key"),
-			fieldValue(session, "lighter_wallet_addr"),
-			fieldValue(session, "lighter_api_key_private_key"),
-		) {
-			missing = append(missing, displayCatalogFieldName(field, lang))
-		}
-	}
-	if len(missing) > 0 {
+	missingKeys := exchangeCreateMissingFieldKeys(session)
+	if len(missingKeys) > 0 {
 		setSkillDAGStep(&session, "resolve_exchange_type")
 		a.saveSkillSession(userID, session)
-		if lang == "zh" {
-			reply := "要创建交易所配置，还缺这些字段：" + formatMissingFieldList(lang, missing) + "。"
-			if exType == "" {
-				reply += "\n例如：OKX、Binance、Bybit。"
-			}
-			return reply
-		}
-		return "One more thing: please tell me these details: " + formatMissingFieldList(lang, missing) + "."
+		return formatExchangeCreateMissingPrompt(lang, session, missingKeys)
 	}
 	validator := exchangeConfigValidator{
 		exchangeType:            exType,
@@ -2268,28 +2338,15 @@ func (a *Agent) handleModelCreateSkill(storeUserID string, userID int64, lang, t
 	missing := make([]string, 0, 4)
 	providerMissing := actionRequiresSlot("model_management", "create", "provider") && provider == ""
 	if providerMissing {
-		missing = append(missing, slotDisplayName("provider", lang))
+		missing = append(missing, "provider")
 	}
 	if !providerMissing && fieldValue(session, "api_key") == "" {
-		missing = append(missing, modelProviderCredentialLabel(lang, provider))
+		missing = append(missing, "api_key")
 	}
 	if len(missing) > 0 {
 		setSkillDAGStep(&session, "resolve_provider")
 		a.saveSkillSession(userID, session)
-		if lang == "zh" {
-			reply := "要创建模型配置，还缺这些字段：" + formatMissingFieldList(lang, missing) + "。"
-			if provider == "" {
-				reply += "\n" + availableModelProvidersMessage(lang)
-			} else {
-				reply += "\n" + modelProviderDetailedGuidance(lang, provider)
-			}
-			return reply
-		}
-		reply := "One more thing: please tell me these details: " + formatMissingFieldList(lang, missing) + "."
-		if provider != "" {
-			reply += "\n" + modelProviderDetailedGuidance(lang, provider)
-		}
-		return reply
+		return formatModelCreateMissingPrompt(lang, session, missing)
 	}
 	validator := modelConfigValidator{
 		provider:        provider,

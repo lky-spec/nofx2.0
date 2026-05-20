@@ -217,24 +217,21 @@ func allowedFieldSpecsForSkillSession(session skillSession, lang string) []llmFl
 		add(&out, "custom_api_url", displayCatalogFieldName("custom_api_url", lang), false)
 		add(&out, "enabled", displayCatalogFieldName("enabled", lang), false)
 	case "exchange_management":
-		required := map[string]bool{"exchange_type": true, "account_name": true}
+		requiredFields := map[string]bool{}
+		for _, key := range exchangeCreateMissingFieldKeys(session) {
+			requiredFields[key] = true
+		}
 		if strings.HasPrefix(session.Action, "update") {
 			add(&out, "update_field", displayCatalogFieldName("update_field", lang), false)
 		}
-		add(&out, "exchange_type", slotDisplayName("exchange_type", lang), required["exchange_type"])
-		add(&out, "account_name", displayCatalogFieldName("account_name", lang), required["account_name"])
-		add(&out, "api_key", displayCatalogFieldName("api_key", lang), false)
-		add(&out, "secret_key", displayCatalogFieldName("secret_key", lang), false)
-		add(&out, "passphrase", displayCatalogFieldName("passphrase", lang), false)
-		add(&out, "testnet", displayCatalogFieldName("testnet", lang), false)
-		add(&out, "enabled", displayCatalogFieldName("enabled", lang), false)
-		add(&out, "hyperliquid_wallet_addr", displayCatalogFieldName("hyperliquid_wallet_addr", lang), false)
-		add(&out, "aster_user", displayCatalogFieldName("aster_user", lang), false)
-		add(&out, "aster_signer", displayCatalogFieldName("aster_signer", lang), false)
-		add(&out, "aster_private_key", displayCatalogFieldName("aster_private_key", lang), false)
-		add(&out, "lighter_wallet_addr", displayCatalogFieldName("lighter_wallet_addr", lang), false)
-		add(&out, "lighter_api_key_private_key", displayCatalogFieldName("lighter_api_key_private_key", lang), false)
-		add(&out, "lighter_api_key_index", displayCatalogFieldName("lighter_api_key_index", lang), false)
+		for _, key := range []string{
+			"exchange_type", "account_name", "api_key", "secret_key", "passphrase", "testnet", "enabled",
+			"hyperliquid_wallet_addr", "hyperliquid_unified_account",
+			"aster_user", "aster_signer", "aster_private_key",
+			"lighter_wallet_addr", "lighter_private_key", "lighter_api_key_private_key", "lighter_api_key_index",
+		} {
+			add(&out, key, productFieldDescription(key, lang), requiredFields[key])
+		}
 	case "trader_management":
 		if strings.HasPrefix(session.Action, "update") {
 			add(&out, "update_field", displayCatalogFieldName("update_field", lang), false)
@@ -360,11 +357,7 @@ func missingFieldKeysForSkillSession(session skillSession) []string {
 				}
 			}
 		} else {
-			for _, key := range []string{"exchange_type", "account_name", "api_key", "secret_key"} {
-				if fieldValue(session, key) == "" {
-					missing = append(missing, key)
-				}
-			}
+			missing = append(missing, exchangeCreateMissingFieldKeys(session)...)
 		}
 	case "trader_management":
 		if strings.HasPrefix(session.Action, "update") || strings.HasPrefix(session.Action, "configure_") {
@@ -534,7 +527,10 @@ func (a *Agent) applyLLMExtractionToSkillSession(storeUserID string, session *sk
 			}
 		case "exchange_management":
 			switch key {
-			case "exchange_type", "account_name", "api_key", "secret_key", "passphrase", "testnet", "enabled", "update_field":
+			case "exchange_type", "account_name", "api_key", "secret_key", "passphrase", "testnet", "enabled", "update_field",
+				"hyperliquid_wallet_addr", "hyperliquid_unified_account",
+				"aster_user", "aster_signer", "aster_private_key",
+				"lighter_wallet_addr", "lighter_private_key", "lighter_api_key_private_key", "lighter_api_key_index":
 				setField(session, key, value)
 			}
 		case "trader_management":

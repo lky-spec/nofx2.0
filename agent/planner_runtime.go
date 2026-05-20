@@ -948,7 +948,7 @@ func (a *Agent) tryStatePriorityPath(ctx context.Context, storeUserID string, us
 	if session := a.getSkillSession(userID); strings.TrimSpace(session.Name) != "" {
 		if answer, ok := a.redirectModelCreateSessionToStrategyCreateIfNeeded(storeUserID, userID, lang, text, session); ok {
 			if onEvent != nil && strings.TrimSpace(answer) != "" {
-				onEvent(StreamEventTool, "hard_skill:strategy_management")
+				onEvent(StreamEventTool, "skill_executor:strategy_management")
 				emitStreamText(onEvent, answer)
 			}
 			return answer, true, nil
@@ -969,13 +969,13 @@ func (a *Agent) tryStatePriorityPath(ctx context.Context, storeUserID string, us
 				if onEvent != nil && strings.TrimSpace(answer) != "" {
 					switch session.Name {
 					case "trader_management":
-						onEvent(StreamEventTool, "hard_skill:trader_management")
+						onEvent(StreamEventTool, "skill_executor:trader_management")
 					case "model_management":
-						onEvent(StreamEventTool, "hard_skill:model_management")
+						onEvent(StreamEventTool, "skill_executor:model_management")
 					case "exchange_management":
-						onEvent(StreamEventTool, "hard_skill:exchange_management")
+						onEvent(StreamEventTool, "skill_executor:exchange_management")
 					case "strategy_management":
-						onEvent(StreamEventTool, "hard_skill:strategy_management")
+						onEvent(StreamEventTool, "skill_executor:strategy_management")
 					}
 					emitStreamText(onEvent, answer)
 				}
@@ -2570,14 +2570,14 @@ func (a *Agent) runPlannedAgentWithContextMode(ctx context.Context, storeUserID 
 			return msg, nil
 		}
 		if hasExplicitCreateIntentForDomain(text, "strategy") {
-			a.logger.Warn("planner failed during strategy create; using template strategy flow instead of legacy loop", "error", err, "user_id", userID)
+			a.logger.Warn("planner failed during strategy create; using guided strategy flow", "error", err, "user_id", userID)
 			session := newActiveSkillSession(userID, "strategy_management", "create")
 			session.Goal = strings.TrimSpace(text)
 			answer, _, flowErr := a.driveActiveSession(ctx, storeUserID, userID, lang, text, session, onEvent)
 			return answer, flowErr
 		}
-		a.logger.Warn("planner failed, falling back to legacy loop", "error", err, "user_id", userID)
-		return a.thinkAndActLegacyWithStore(ctx, storeUserID, userID, lang, text, onEvent)
+		a.logger.Warn("planner failed; returning bounded failure response", "error", err, "user_id", userID)
+		return a.plannerFailureResponse(ctx, userID, lang, text, err, onEvent)
 	}
 	a.logPlannerTiming(state.SessionID, userID, "prepare_execution_state", requestStartedAt, nil)
 
@@ -2597,15 +2597,15 @@ func (a *Agent) runPlannedAgentWithContextMode(ctx context.Context, storeUserID 
 			return answer, nil
 		}
 		if hasExplicitCreateIntentForDomain(state.Goal, "strategy") || hasExplicitCreateIntentForDomain(text, "strategy") {
-			a.logger.Warn("plan execution failed during strategy create; using template strategy flow instead of legacy loop", "error", err, "user_id", userID)
+			a.logger.Warn("plan execution failed during strategy create; using guided strategy flow", "error", err, "user_id", userID)
 			a.clearExecutionState(userID)
 			session := newActiveSkillSession(userID, "strategy_management", "create")
 			session.Goal = defaultIfEmpty(strings.TrimSpace(state.Goal), strings.TrimSpace(text))
 			answer, _, flowErr := a.driveActiveSession(ctx, storeUserID, userID, lang, text, session, onEvent)
 			return answer, flowErr
 		}
-		a.logger.Warn("plan execution failed, falling back to legacy loop", "error", err, "user_id", userID)
-		return a.thinkAndActLegacyWithStore(ctx, storeUserID, userID, lang, text, onEvent)
+		a.logger.Warn("plan execution failed; returning bounded failure response", "error", err, "user_id", userID)
+		return a.plannerFailureResponse(ctx, userID, lang, text, err, onEvent)
 	}
 
 	if guarded, blocked := guardUnsupportedAsyncPromise(lang, answer); blocked {
@@ -2615,6 +2615,30 @@ func (a *Agent) runPlannedAgentWithContextMode(ctx context.Context, storeUserID 
 	a.runPostResponseMaintenanceAsync(userID)
 	a.logPlannerTiming(state.SessionID, userID, "run_planned_agent_total", requestStartedAt, nil)
 	return answer, nil
+}
+
+func (a *Agent) plannerFailureResponse(ctx context.Context, userID int64, lang, text string, cause error, onEvent func(event, data string)) (string, error) {
+	if state := a.getExecutionState(userID); hasActiveExecutionState(state) || len(state.Steps) > 0 {
+		completed := make([]PlanStep, 0, len(state.Steps))
+		for _, step := range state.Steps {
+			if step.Status == planStepStatusCompleted && step.Type == planStepTypeTool {
+				completed = append(completed, step)
+			}
+		}
+		if answer := formatCompletedPlanFallback(lang, completed); answer != "" {
+			if onEvent != nil {
+				emitStreamText(onEvent, answer)
+			}
+			return answer, nil
+		}
+	}
+	if isAIServiceFailureError(cause) {
+		return a.aiServiceFailure(lang, cause)
+	}
+	if answer, ok := a.tryDirectAnswer(ctx, userID, lang, text, onEvent); ok {
+		return answer, nil
+	}
+	return a.aiServiceFailure(lang, cause)
 }
 
 func (a *Agent) runPostResponseMaintenanceAsync(userID int64) {
@@ -3838,7 +3862,15 @@ func isAIServiceFailureError(err error) bool {
 	return strings.Contains(lower, "api returned error") ||
 		strings.Contains(lower, "rate_limit_error") ||
 		strings.Contains(lower, "upstream_empty_output") ||
+		strings.Contains(lower, "authentication_error") ||
+		strings.Contains(lower, "authentication_failed") ||
+		strings.Contains(lower, "invalid api key") ||
+		strings.Contains(lower, "unauthorized") ||
+		strings.Contains(lower, "status 401") ||
+		strings.Contains(lower, "invalid character '<'") ||
+		strings.Contains(lower, "unexpected character '<'") ||
 		strings.Contains(lower, "insufficient balance") ||
+		strings.Contains(lower, "timeout") ||
 		strings.Contains(lower, "context deadline exceeded")
 }
 
@@ -3921,195 +3953,4 @@ func (a *Agent) tryExecutionSummaryFallbackOnAIError(lang string, state *Executi
 		emitStreamText(onEvent, answer)
 	}
 	return answer, true
-}
-
-func (a *Agent) tryDeterministicFallbackAfterAIServiceFailure(ctx context.Context, userID int64, lang, text string, onEvent func(event, data string)) (string, bool, error) {
-	storeUserID := storeUserIDFromContext(ctx)
-	if answer, ok := a.tryHardSkill(ctx, storeUserID, userID, lang, text, onEvent); ok {
-		return a.maybeAppendResumePrompt(userID, lang, text, answer), true, nil
-	}
-	if state := a.getExecutionState(userID); hasActiveExecutionState(state) || len(state.Steps) > 0 {
-		completed := make([]PlanStep, 0, len(state.Steps))
-		for _, step := range state.Steps {
-			if step.Status == planStepStatusCompleted && step.Type == planStepTypeTool {
-				completed = append(completed, step)
-			}
-		}
-		if answer := formatCompletedPlanFallback(lang, completed); answer != "" {
-			return a.maybeAppendResumePrompt(userID, lang, text, answer), true, nil
-		}
-	}
-	return "", false, nil
-}
-
-func (a *Agent) thinkAndActLegacy(ctx context.Context, userID int64, lang, text string, onEvent func(event, data string)) (string, error) {
-	return a.thinkAndActLegacyWithStore(ctx, storeUserIDFromContext(ctx), userID, lang, text, onEvent)
-}
-
-func (a *Agent) thinkAndActLegacyWithStore(ctx context.Context, storeUserID string, userID int64, lang, text string, onEvent func(event, data string)) (string, error) {
-	systemPrompt := a.buildSystemPromptForStoreUser(lang, storeUserID)
-	enrichment := a.gatherContext(storeUserID, text)
-	preferencesCtx := a.buildPersistentPreferencesContext(userID)
-
-	userPrompt := text
-	if preferencesCtx != "" {
-		userPrompt = preferencesCtx + "\n\n---\n" + userPrompt
-	}
-	if enrichment != "" {
-		userPrompt = text + "\n\n---\n[NOFXi System Context - real-time data for reference]\n" + enrichment
-		if preferencesCtx != "" {
-			userPrompt = preferencesCtx + "\n\n---\n" + userPrompt
-		}
-	}
-
-	messages := []mcp.Message{mcp.NewSystemMessage(systemPrompt)}
-	taskStateCtx := buildTaskStateContext(a.getTaskState(userID))
-	if isConfigOrTraderIntent(text) {
-		taskStateCtx = ""
-	}
-	if taskStateCtx != "" {
-		messages = append(messages, mcp.NewSystemMessage(taskStateCtx))
-	}
-	// NOTE: We intentionally do NOT inject conversation history into the legacy
-	// loop. Even a single prior round causes DeepSeek to hallucinate data from
-	// earlier topics (e.g. outputting strategy details when asked about a wallet).
-	// The planner path handles multi-turn context properly; the legacy loop is
-	// a single-turn fallback. References like "那binance的钱包呢" still work
-	// because the text itself contains enough keywords for domain routing.
-	messages = append(messages, mcp.NewUserMessage(userPrompt))
-
-	// Use domain-filtered tools to reduce over-fetching; fall back to full set
-	// for "general" domain to preserve full functionality.
-	domain := plannerToolDomainForText(text)
-	tools := plannerToolsForText(text)
-	if domain == "general" {
-		tools = agentTools()
-	}
-	const maxToolRounds = 5
-	for round := 0; round < maxToolRounds; round++ {
-		req := &mcp.Request{
-			Messages:   messages,
-			Tools:      tools,
-			ToolChoice: "auto",
-			Ctx:        ctx,
-		}
-
-		resp, err := a.aiClient.CallWithRequestFull(req)
-		if err != nil {
-			if round == 0 {
-				plainResp, plainErr := a.aiClient.CallWithRequest(&mcp.Request{Messages: messages, Ctx: ctx})
-				if plainErr != nil {
-					a.logger.Warn("legacy AI plain fallback failed", "error", plainErr, "user_id", userID)
-					if answer, ok, fallbackErr := a.tryDeterministicFallbackAfterAIServiceFailure(ctx, userID, lang, text, onEvent); ok || fallbackErr != nil {
-						return answer, fallbackErr
-					}
-					return a.aiServiceFailure(lang, plainErr)
-				}
-				if looksLikeInternalAgentJSON(plainResp) {
-					a.logger.Warn("legacy AI plain fallback returned internal orchestration json; attempting active-flow recovery", "user_id", userID)
-					if answer, ok, err := a.tryRecoverFromInternalAgentJSON(ctx, storeUserID, userID, lang, text, plainResp, onEvent); ok || err != nil {
-						return answer, err
-					}
-					if answer, ok, fallbackErr := a.tryDeterministicFallbackAfterAIServiceFailure(ctx, userID, lang, text, onEvent); ok || fallbackErr != nil {
-						return answer, fallbackErr
-					}
-					if lang == "zh" {
-						return "我理解到你还在继续刚才的操作，但这次内部回复格式不对。你再说一次刚才想做的那一步，我继续接着帮你。", nil
-					}
-					return "I can tell you're continuing the previous task, but the internal response format was invalid. Please repeat that step and I'll keep going.", nil
-				}
-				if onEvent != nil {
-					emitStreamText(onEvent, plainResp)
-				}
-				return plainResp, nil
-			}
-			a.logger.Warn("legacy AI tool round failed", "error", err, "user_id", userID, "round", round)
-			if answer, ok, fallbackErr := a.tryDeterministicFallbackAfterAIServiceFailure(ctx, userID, lang, text, onEvent); ok || fallbackErr != nil {
-				return answer, fallbackErr
-			}
-			return a.aiServiceFailure(lang, err)
-		}
-
-		if len(resp.ToolCalls) == 0 {
-			if looksLikeInternalAgentJSON(resp.Content) {
-				a.logger.Warn("legacy AI returned internal orchestration json; attempting active-flow recovery", "user_id", userID)
-				if answer, ok, err := a.tryRecoverFromInternalAgentJSON(ctx, storeUserID, userID, lang, text, resp.Content, onEvent); ok || err != nil {
-					return answer, err
-				}
-				if answer, ok, fallbackErr := a.tryDeterministicFallbackAfterAIServiceFailure(ctx, userID, lang, text, onEvent); ok || fallbackErr != nil {
-					return answer, fallbackErr
-				}
-				if lang == "zh" {
-					return "我理解到你还在继续刚才的操作，但这次内部回复格式不对。你再说一次刚才想做的那一步，我继续接着帮你。", nil
-				}
-				return "I can tell you're continuing the previous task, but the internal response format was invalid. Please repeat that step and I'll keep going.", nil
-			}
-			if onEvent != nil {
-				reply := resp.Content
-				if guarded, blocked := guardUnsupportedAsyncPromise(lang, reply); blocked {
-					reply = guarded
-				}
-				emitStreamText(onEvent, reply)
-				return reply, nil
-			}
-			if guarded, blocked := guardUnsupportedAsyncPromise(lang, resp.Content); blocked {
-				return guarded, nil
-			}
-			return resp.Content, nil
-		}
-
-		assistantMsg := mcp.Message{Role: "assistant", ToolCalls: resp.ToolCalls}
-		if resp.Content != "" {
-			assistantMsg.Content = resp.Content
-		}
-		if resp.ReasoningContent != "" {
-			assistantMsg.ReasoningContent = resp.ReasoningContent
-		}
-		messages = append(messages, assistantMsg)
-
-		for _, tc := range resp.ToolCalls {
-			if onEvent != nil {
-				onEvent(StreamEventTool, tc.Function.Name)
-			}
-			result := a.handleToolCall(ctx, storeUserID, userID, lang, tc)
-			messages = append(messages, mcp.Message{
-				Role:       "tool",
-				Content:    result,
-				ToolCallID: tc.ID,
-			})
-		}
-	}
-
-	finalResp, err := a.aiClient.CallWithRequest(&mcp.Request{Messages: messages, Ctx: ctx})
-	if err != nil {
-		a.logger.Warn("legacy AI final response failed", "error", err, "user_id", userID)
-		if answer, ok, fallbackErr := a.tryDeterministicFallbackAfterAIServiceFailure(ctx, userID, lang, text, onEvent); ok || fallbackErr != nil {
-			return answer, fallbackErr
-		}
-		return a.aiServiceFailure(lang, err)
-	}
-	if looksLikeInternalAgentJSON(finalResp) {
-		a.logger.Warn("legacy AI final response returned internal orchestration json; attempting active-flow recovery", "user_id", userID)
-		if answer, ok, err := a.tryRecoverFromInternalAgentJSON(ctx, storeUserID, userID, lang, text, finalResp, onEvent); ok || err != nil {
-			return answer, err
-		}
-		if answer, ok, fallbackErr := a.tryDeterministicFallbackAfterAIServiceFailure(ctx, userID, lang, text, onEvent); ok || fallbackErr != nil {
-			return answer, fallbackErr
-		}
-		if lang == "zh" {
-			return "我理解到你还在继续刚才的操作，但这次内部回复格式不对。你再说一次刚才想做的那一步，我继续接着帮你。", nil
-		}
-		return "I can tell you're continuing the previous task, but the internal response format was invalid. Please repeat that step and I'll keep going.", nil
-	}
-	if onEvent != nil {
-		if guarded, blocked := guardUnsupportedAsyncPromise(lang, finalResp); blocked {
-			finalResp = guarded
-		}
-		emitStreamText(onEvent, finalResp)
-		return finalResp, nil
-	}
-	if guarded, blocked := guardUnsupportedAsyncPromise(lang, finalResp); blocked {
-		return guarded, nil
-	}
-	return finalResp, nil
 }

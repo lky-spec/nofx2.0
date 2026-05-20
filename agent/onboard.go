@@ -310,8 +310,6 @@ func (a *Agent) finishSetup(storeUserID string, userID int64, state *SetupState,
 		"store_user_id", storeUserID,
 	)
 
-	// TODO: Use store to create exchange + trader config
-	// For now, log the config and tell user
 	a.clearSetupState(userID)
 
 	result := ""

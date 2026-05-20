@@ -74,6 +74,9 @@ func detectCatalogField(text string, catalog []entityFieldMeta) string {
 }
 
 func displayCatalogFieldName(field, lang string) string {
+	if label := productFieldLabel(field, lang); strings.TrimSpace(label) != "" && label != strings.TrimSpace(field) {
+		return label
+	}
 	switch field {
 	case "name":
 		if lang == "zh" {
@@ -225,10 +228,6 @@ func (a *Agent) executeAtomicSkillWithSession(storeUserID string, userID int64, 
 	return ""
 }
 
-func parseLooseTextValue(text string) string {
-	return ""
-}
-
 func entityFieldExplicitlyMentioned(text string, keywords []string) bool {
 	if len(keywords) == 0 {
 		return false
@@ -248,10 +247,6 @@ type traderUpdateArgs struct {
 func (a traderUpdateArgs) hasAny() bool {
 	return a.AIModelID != "" || a.ExchangeID != "" || a.StrategyID != "" ||
 		a.ScanIntervalMinutes != nil || a.IsCrossMargin != nil || a.ShowInCompetition != nil
-}
-
-func parseStandaloneTraderUpdateArgs(text string) traderUpdateArgs {
-	return traderUpdateArgs{}
 }
 
 func mergeTraderUpdateArgs(base, patch traderUpdateArgs) traderUpdateArgs {

@@ -391,7 +391,7 @@ func (a *Agent) tryHardSkill(ctx context.Context, storeUserID string, userID int
 		if handled {
 			a.recordSkillInteraction(userID, text, answer)
 			if onEvent != nil {
-				onEvent(StreamEventTool, "hard_skill:trader_management:create")
+				onEvent(StreamEventTool, "skill_executor:trader_management:create")
 				emitStreamText(onEvent, answer)
 			}
 			return answer, true
@@ -555,9 +555,23 @@ func renderSkillMissingLabels(lang string, missing []string) []string {
 
 func (a *Agent) buildTraderCreateMissingPrompt(storeUserID, lang string, session skillSession, availableResources map[string]any) string {
 	missing := missingFieldKeysForSkillSession(session)
-	missingLabels := strings.Join(renderSkillMissingLabels(lang, missing), "、")
 	prereqs := make([]string, 0, 3)
 	optionLines := make([]string, 0, 3)
+	nextAskZH := ""
+	nextAskEN := ""
+	if containsString(missing, "name") {
+		nextAskZH = "先给交易员取个名字。交易员本质上是“模型 + 交易所 + 策略”的组合，名字只是方便你以后识别。"
+		nextAskEN = "First give the trader a name. A trader is the combination of model + exchange + strategy; the name is just for identifying it later."
+	} else if containsString(missing, "exchange_name") {
+		nextAskZH = "下一步选交易所账户。交易员会用这个账户读取余额、持仓并执行订单。"
+		nextAskEN = "Next choose the exchange account. The trader uses it to read balances, positions, and place orders."
+	} else if containsString(missing, "model_name") {
+		nextAskZH = "下一步选模型配置。模型负责读策略上下文并做交易判断。"
+		nextAskEN = "Next choose the model config. The model reads the strategy context and makes trading decisions."
+	} else if containsString(missing, "strategy_name") {
+		nextAskZH = "下一步选策略模板。策略决定交易员看哪些数据、怎么判断开平仓。"
+		nextAskEN = "Next choose the strategy template. The strategy decides what data the trader reads and how it judges entries/exits."
+	}
 	if exchanges, _ := availableResources["exchanges"].([]traderSkillOption); len(exchanges) == 0 && containsString(missing, "exchange_name") {
 		if lang == "zh" {
 			prereqs = append(prereqs, "当前还没有可用交易所配置")
@@ -598,22 +612,32 @@ func (a *Agent) buildTraderCreateMissingPrompt(storeUserID, lang string, session
 		}
 	}
 	if lang == "zh" {
-		reply := "新建交易员还缺这些槽位：" + missingLabels + "。"
+		reply := defaultIfEmpty(nextAskZH, "交易员还需要补一点信息。")
+		labels := strings.Join(renderSkillMissingLabels(lang, missing), "、")
+		if labels != "" {
+			reply += "\n待确认：" + labels + "。"
+		}
 		if len(prereqs) > 0 {
 			reply += "\n" + strings.Join(prereqs, "；") + "。"
 		}
 		if len(optionLines) > 0 {
 			reply += "\n" + strings.Join(optionLines, "\n")
 		}
+		reply += "\n你可以直接回复一个名字/选项，也可以说“你帮我按现有配置推荐”。"
 		return reply
 	}
-	reply := "Creating the trader still needs these slots: " + strings.Join(renderSkillMissingLabels(lang, missing), ", ") + "."
+	reply := defaultIfEmpty(nextAskEN, "The trader needs a bit more information.")
+	labels := strings.Join(renderSkillMissingLabels(lang, missing), ", ")
+	if labels != "" {
+		reply += "\nStill needed: " + labels + "."
+	}
 	if len(prereqs) > 0 {
 		reply += "\n" + strings.Join(prereqs, "; ") + "."
 	}
 	if len(optionLines) > 0 {
 		reply += "\n" + strings.Join(optionLines, "\n")
 	}
+	reply += "\nReply with a name/choice, or ask me to recommend from the existing configs."
 	return reply
 }
 

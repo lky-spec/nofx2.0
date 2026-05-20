@@ -912,9 +912,9 @@ func TestAIStrategySystemEnforcedFieldsAreDisplayedButNotEditable(t *testing.T) 
 		},
 	}
 	reply := formatStrategyCreateFinalConfirmation("zh", session, cfg)
-	for _, want := range []string{"最大持仓数（System enforced）", "BTC/ETH 单币仓位上限（System enforced）", "最大保证金使用率（System enforced）", "最小开仓金额（System enforced）"} {
-		if !strings.Contains(reply, want) {
-			t.Fatalf("expected final summary to display %q, got: %s", want, reply)
+	for _, unexpected := range []string{"System enforced", "最大持仓数", "单币仓位上限", "最大保证金使用率", "最小开仓金额"} {
+		if strings.Contains(reply, unexpected) {
+			t.Fatalf("final summary should not ask/display system-only field %q, got: %s", unexpected, reply)
 		}
 	}
 
@@ -949,7 +949,7 @@ func TestStrategyCreateNaturalLanguageDoesNotBypassTemplateType(t *testing.T) {
 	}
 	session := activeToLegacySkillSession(active)
 	reply := a.handleStrategyCreateSkill("default", 1, "zh", "BTCETH_15m_趋势", session)
-	if !strings.Contains(reply, "先选择策略类型") {
+	if !strings.Contains(reply, "先定策略类型") {
 		t.Fatalf("expected strategy type question instead of legacy natural-language parsing, got: %s", reply)
 	}
 
@@ -979,7 +979,7 @@ func TestStrategyCreateAsksTypeBeforeUsingDefaultTemplateType(t *testing.T) {
 	}
 
 	reply := a.handleStrategyCreateSkill("default", 1, "zh", "我的策略", session)
-	if !strings.Contains(reply, "先选择策略类型") || strings.Contains(reply, "交易所") {
+	if !strings.Contains(reply, "先定策略类型") || strings.Contains(reply, "交易所") {
 		t.Fatalf("expected strategy type question without exchange binding, got: %s", reply)
 	}
 	strategies, err := st.Strategy().List("default")
@@ -1010,7 +1010,7 @@ func TestStrategyCreateConfirmationStillRequiresType(t *testing.T) {
 	}
 
 	reply := a.handleStrategyCreateSkill("default", 1, "zh", "确认创建", session)
-	if !strings.Contains(reply, "先选择策略类型") {
+	if !strings.Contains(reply, "先定策略类型") {
 		t.Fatalf("expected type question before create, got: %s", reply)
 	}
 	strategies, err := st.Strategy().List("default")
@@ -1063,7 +1063,7 @@ func TestStrategyCreateProposesGridDefaultsBeforeCreate(t *testing.T) {
 	}
 
 	reply := a.handleStrategyCreateSkill("default", 1, "zh", "grid_trading", session)
-	if !strings.Contains(reply, "还缺") || !strings.Contains(reply, "交易对") || !strings.Contains(reply, "网格数量") {
+	if !strings.Contains(reply, "网格的核心形状") || !strings.Contains(reply, "交易对") || !strings.Contains(reply, "网格密度") {
 		t.Fatalf("expected grid template missing-fields prompt, got: %s", reply)
 	}
 	strategies, err := st.Strategy().List("default")
@@ -1108,7 +1108,7 @@ func TestStrategyCreateSwitchingTypeDropsPreviousTemplateFields(t *testing.T) {
 	}
 
 	reply := a.handleStrategyCreateSkill("default", 1, "zh", "算了选网格策略吧", session)
-	if !strings.Contains(reply, "还缺") || !strings.Contains(reply, "交易对") {
+	if !strings.Contains(reply, "网格的核心形状") || !strings.Contains(reply, "交易对") {
 		t.Fatalf("expected grid missing fields after type switch, got: %s", reply)
 	}
 	if strings.Contains(reply, "AI500") || strings.Contains(reply, "置信度") {
@@ -1184,7 +1184,7 @@ func TestStrategyCreateConfirmationFillsMissingGridDefaults(t *testing.T) {
 	}
 
 	reply := a.handleStrategyCreateSkill("default", 1, "zh", "好的，就这样", session)
-	if !strings.Contains(reply, "还缺") || strings.Contains(reply, "已创建策略") {
+	if !strings.Contains(reply, "网格的核心形状") || strings.Contains(reply, "已创建策略") {
 		t.Fatalf("expected missing grid fields instead of default create, got: %s", reply)
 	}
 	strategies, err := st.Strategy().List("default")
@@ -1621,12 +1621,12 @@ func TestStrategyCreateOptionsQuestionExplainsCurrentMissingField(t *testing.T) 
 
 func TestStrategyCreateMissingFieldsIncludeInlineOptions(t *testing.T) {
 	reply := formatStrategyCreateConfigNeeded("zh", "source_type,primary_timeframe,btceth_max_leverage,min_confidence,trading_frequency")
-	for _, want := range []string{"AI500", "OI Top", "OI Low", "静态币种", "1m", "1h", "1～20", "50～100", "每天最多"} {
+	for _, want := range []string{"AI500", "OI Top", "OI Low", "静态币种", "按稳健推荐"} {
 		if !strings.Contains(reply, want) {
 			t.Fatalf("expected missing-field prompt to include option/range %q, got: %s", want, reply)
 		}
 	}
-	if !strings.Contains(reply, "你帮我按稳健/高频/激进来推荐") {
+	if strings.Contains(reply, "这份策略模板还没填完整") {
 		t.Fatalf("expected prompt to offer recommendation shortcut, got: %s", reply)
 	}
 }
@@ -1665,13 +1665,13 @@ func TestStrategyCreateConfigPatchReplyUsesStructuredMissingFields(t *testing.T)
 	if !handled {
 		t.Fatalf("expected recommendation request to be handled")
 	}
-	if !strings.Contains(reply, "这份策略模板还没填完整") {
+	if !strings.Contains(reply, "交易边界") {
 		t.Fatalf("expected structured missing-field prompt after partial config_patch, got: %s", reply)
 	}
 	if strings.Contains(reply, "我建议按高频但稳健来填") {
 		t.Fatalf("LLM free-form recommendation should not be used as the current plan, got: %s", reply)
 	}
-	if !strings.Contains(reply, "BTC/ETH 最大杠杆") || !strings.Contains(reply, "开仓标准") {
+	if !strings.Contains(reply, "杠杆") || !strings.Contains(reply, "开仓标准") {
 		t.Fatalf("expected deterministic missing template fields, got: %s", reply)
 	}
 }
@@ -1711,13 +1711,13 @@ func TestStrategyCreateFirstStageConfigProgressUsesStructuredMissingFields(t *te
 	if !handled {
 		t.Fatalf("expected active session to be handled")
 	}
-	if !strings.Contains(reply, "这份策略模板还没填完整") {
+	if !strings.Contains(reply, "观察周期") {
 		t.Fatalf("expected structured missing-field prompt after first-stage config progress, got: %s", reply)
 	}
 	if strings.Contains(reply, "其他我建议按高频稳健来定") {
 		t.Fatalf("LLM free-form recommendation should not be used as the current plan, got: %s", reply)
 	}
-	if !strings.Contains(reply, "主周期") || !strings.Contains(reply, "BTC/ETH 最大杠杆") {
+	if !strings.Contains(reply, "周期") || !strings.Contains(reply, "稳健") {
 		t.Fatalf("expected deterministic missing template fields, got: %s", reply)
 	}
 }
@@ -1939,7 +1939,7 @@ func TestStrategyCreateGridPatchKeepsBackendGridDefaults(t *testing.T) {
 	}
 
 	reply := a.handleStrategyCreateSkill("default", 1, "zh", "确认创建", session)
-	if !strings.Contains(reply, "还缺") || strings.Contains(reply, "已创建策略") {
+	if !strings.Contains(reply, "网格的核心形状") || strings.Contains(reply, "已创建策略") {
 		t.Fatalf("expected incomplete grid patch to ask for missing fields, got: %s", reply)
 	}
 }

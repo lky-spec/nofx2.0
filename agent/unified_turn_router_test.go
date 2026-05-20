@@ -171,7 +171,7 @@ func TestExecuteUnifiedTurnDecisionContinueActiveDoesNotHandOffToPlanner(t *test
 	if !handled {
 		t.Fatal("expected active session continuation to be handled")
 	}
-	if !strings.Contains(answer, "还缺") || !strings.Contains(answer, "交易对") || strings.Contains(answer, "交易机器人") || strings.Contains(answer, "AI模型和交易所") {
+	if !strings.Contains(answer, "网格的核心形状") || !strings.Contains(answer, "交易对") || strings.Contains(answer, "交易机器人") || strings.Contains(answer, "AI模型和交易所") {
 		t.Fatalf("expected strategy session to continue without planner/trader handoff, got: %s", answer)
 	}
 	if _, ok := a.getActiveSkillSession(userID); !ok {

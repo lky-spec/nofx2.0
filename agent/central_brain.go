@@ -1290,8 +1290,46 @@ func mergeExtractedData(s *ActiveSkillSession, data map[string]any) {
 		if k == "" {
 			continue
 		}
+		if s.SkillName == "strategy_management" && s.ActionName == "create" && k == strategyCreateConfigPatchField {
+			if existing, ok := s.CollectedFields[k]; ok {
+				merged := mergeConfigPatchValues(existing, v)
+				if len(merged) > 0 {
+					s.CollectedFields[k] = merged
+					continue
+				}
+			}
+		}
 		s.CollectedFields[k] = v
 	}
+}
+
+func mergeConfigPatchValues(existing, incoming any) map[string]any {
+	base := mapFromAny(existing)
+	next := mapFromAny(incoming)
+	if len(base) == 0 {
+		return next
+	}
+	if len(next) == 0 {
+		return base
+	}
+	return deepMergeMaps(base, next)
+}
+
+func deepMergeMaps(base, patch map[string]any) map[string]any {
+	out := make(map[string]any, len(base)+len(patch))
+	for key, value := range base {
+		out[key] = value
+	}
+	for key, value := range patch {
+		existingMap := mapFromAny(out[key])
+		patchMap := mapFromAny(value)
+		if len(existingMap) > 0 && len(patchMap) > 0 {
+			out[key] = deepMergeMaps(existingMap, patchMap)
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 func filterExtractedDataForActiveSession(session ActiveSkillSession, data map[string]any, lang string) map[string]any {
