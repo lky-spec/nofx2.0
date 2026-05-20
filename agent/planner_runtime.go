@@ -927,6 +927,14 @@ func (a *Agent) tryStatePriorityPath(ctx context.Context, storeUserID string, us
 	if answer, ok := a.tryResumeSuspendedTask(userID, lang, text); ok {
 		return answer, true, nil
 	}
+	if session, ok := a.activeStrategyCreateSession(userID); ok {
+		if answer, handled, err := a.tryHandleActiveStrategyCreatePriority(ctx, storeUserID, userID, lang, text, session, onEvent); handled || err != nil {
+			return answer, handled, err
+		}
+		if _, hasActive := a.getActiveSkillSession(userID); hasActive {
+			return a.driveActiveSession(ctx, storeUserID, userID, lang, text, session, onEvent)
+		}
+	}
 	if !a.hasActiveSkillSession(userID) && !hasActiveWorkflowSession(a.getWorkflowSession(userID)) && !hasActiveExecutionState(a.getExecutionState(userID)) {
 		if a.tryRestoreSuspendedTaskFromIdle(ctx, userID, lang, text) {
 			return a.tryStatePriorityPath(ctx, storeUserID, userID, lang, text, onEvent)

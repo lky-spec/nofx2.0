@@ -31,6 +31,12 @@ func (a *Agent) tryLLMIntentRoute(ctx context.Context, storeUserID string, userI
 		return "", false, nil
 	}
 
+	if session, ok := a.activeStrategyCreateSession(userID); ok {
+		if answer, handled, err := a.tryHandleActiveStrategyCreatePriority(ctx, storeUserID, userID, lang, text, session, onEvent); handled || err != nil {
+			return answer, handled, err
+		}
+	}
+
 	if decision, ok, err := a.routeTurnUnifiedWithLLM(ctx, userID, lang, text); err == nil && ok {
 		if answer, handled, execErr := a.executeUnifiedTurnDecision(ctx, storeUserID, userID, lang, text, decision, onEvent); handled || execErr != nil {
 			return answer, handled, execErr

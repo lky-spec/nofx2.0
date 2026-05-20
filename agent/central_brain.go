@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"nofx/mcp"
 	"nofx/store"
@@ -364,8 +365,13 @@ func (a *Agent) driveActiveSession(ctx context.Context, storeUserID string, user
 		var canExecute bool
 		session, repairReply, canExecute = a.ensureStrategyCreateExecutableState(ctx, lang, text, session)
 		if !canExecute {
+			if repairReply == "" {
+				if deterministic, ok := strategyCreateTemplateMissingReply(lang, text, session); ok {
+					repairReply = deterministic
+				}
+			}
 			if strategyCreateLooseConfirmationReply(text) {
-				repairReply = a.askForMissingFields(lang, session)
+				repairReply = defaultIfEmpty(repairReply, a.askForMissingFields(lang, session))
 			} else {
 				repairReply = defaultIfEmpty(repairReply, a.askForMissingFields(lang, session))
 			}
@@ -626,6 +632,76 @@ func (a *Agent) activeStrategyCreateSession(userID int64) (ActiveSkillSession, b
 		}, legacy), true
 	}
 	return ActiveSkillSession{}, false
+}
+
+func (a *Agent) tryHandleActiveStrategyCreatePriority(ctx context.Context, storeUserID string, userID int64, lang, text string, session ActiveSkillSession, onEvent func(event, data string)) (string, bool, error) {
+	if session.SkillName != "strategy_management" || session.ActionName != "create" {
+		return "", false, nil
+	}
+	if strings.TrimSpace(session.SessionID) == "" {
+		session.SessionID = fmt.Sprintf("as_%d", time.Now().UnixNano())
+	}
+	if strategyCreateLooseConfirmationReply(text) {
+		return a.driveActiveSession(ctx, storeUserID, userID, lang, text, session, onEvent)
+	}
+	if !strategyCreateStatusQuestion(text) {
+		return "", false, nil
+	}
+
+	reply := strategyCreateStatusReply(lang, session)
+	if strings.TrimSpace(reply) == "" {
+		return "", false, nil
+	}
+	if strategyCreateSessionReady(lang, session) {
+		if session.CollectedFields == nil {
+			session.CollectedFields = map[string]any{}
+		}
+		session.CollectedFields["awaiting_final_confirmation"] = true
+	}
+	session = appendActiveSessionLocalHistory(session, "user", text)
+	session = appendActiveSessionLocalHistory(session, "assistant", reply)
+	setActiveSessionPendingHint(&session, reply)
+	a.saveActiveSkillSession(session)
+	emitBrainReply(onEvent, reply)
+	a.recordSkillInteraction(userID, text, reply)
+	return reply, true, nil
+}
+
+func strategyCreateStatusQuestion(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	return containsAny(lower, []string{
+		"什么信息", "啥信息", "哪些信息", "什么资料", "还差什么", "缺什么", "还缺", "需要什么", "要补什么", "补充什么",
+		"齐了没", "齐了吗", "信息齐", "到底齐了没", "还要什么", "还有什么",
+		"what info", "what information", "what is missing", "missing info", "anything else",
+	})
+}
+
+func strategyCreateStatusReply(lang string, session ActiveSkillSession) string {
+	legacy := activeToLegacySkillSession(session)
+	cfg, _, _, err := strategyCreateConfigFromSession(legacy, lang)
+	if err != nil {
+		if lang == "zh" {
+			return "我现在没法把这份策略配置整理成可创建格式：" + err.Error()
+		}
+		return "I cannot prepare this strategy config yet: " + err.Error()
+	}
+	ready, missingKind := strategyCreateConfigReady(legacy, cfg, "")
+	if ready {
+		if lang == "zh" {
+			return "信息已经齐了，不需要再补充。请回复“确认创建”，我会正式创建这个策略。"
+		}
+		return "All required information is complete. Reply \"confirm create\" and I will create the strategy."
+	}
+	if strings.TrimSpace(missingKind) == "" {
+		if lang == "zh" {
+			return "我还需要补齐策略配置后才能创建。你可以直接说偏好，也可以说“按稳健推荐”。"
+		}
+		return "I still need the strategy configuration before creating it. You can give preferences or ask for a conservative recommendation."
+	}
+	return formatStrategyCreateConfigNeeded(lang, missingKind)
 }
 
 func guardStrategyCreateBeforeFinalConfirmation(lang string, session ActiveSkillSession) (string, bool) {
@@ -952,6 +1028,25 @@ func shouldTrustDeterministicSkillReply(outcome skillOutcome) bool {
 }
 
 func (a *Agent) askForMissingFields(lang string, session ActiveSkillSession) string {
+	if session.SkillName == "strategy_management" && session.ActionName == "create" {
+		legacy := activeToLegacySkillSession(session)
+		cfg, _, _, err := strategyCreateConfigFromSession(legacy, lang)
+		if err == nil {
+			ready, missingKind := strategyCreateConfigReady(legacy, cfg, "")
+			if ready {
+				if lang == "zh" {
+					return "信息已经齐了，不需要再补充。请回复“确认创建”，我会正式创建这个策略。"
+				}
+				return "All required information is complete. Reply \"confirm create\" and I will create the strategy."
+			}
+			if strings.TrimSpace(missingKind) != "" {
+				if reply := formatStrategyCreateFieldOptionsReply(lang, "", missingKind); reply != "" {
+					return reply
+				}
+				return formatStrategyCreateConfigNeeded(lang, missingKind)
+			}
+		}
+	}
 	missing := missingRequiredFieldsForBrain(session)
 	if len(missing) == 0 {
 		if lang == "zh" {

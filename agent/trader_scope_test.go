@@ -1467,6 +1467,68 @@ func TestUnifiedPlannedAgentCannotStealActiveStrategyCreateConfirmation(t *testi
 	}
 }
 
+func TestActiveStrategyCreateStatusQuestionUsesSavedState(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "strategy-create-status-question.db")
+	st, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	a := New(nil, st, DefaultConfig(), slog.Default())
+	a.SetAIClient(&staticAIClient{response: `{"topic_intent":"instant_reply","business_action":"direct_answer","reply_to_user":"还需要一点信息，我再继续。","confidence":1}`})
+
+	userID := int64(42)
+	a.saveActiveSkillSession(readyAI500StrategyCreateActiveSession(userID))
+
+	reply, err := a.thinkAndAct(context.Background(), "default", userID, "zh", "什么信息")
+	if err != nil {
+		t.Fatalf("think and act: %v", err)
+	}
+	if strings.Contains(reply, "还需要一点信息") {
+		t.Fatalf("status question should not use generic missing fallback, got: %s", reply)
+	}
+	if !strings.Contains(reply, "信息已经齐了") || !strings.Contains(reply, "确认创建") {
+		t.Fatalf("expected ready-to-confirm status reply, got: %s", reply)
+	}
+	strategies, err := st.Strategy().List("default")
+	if err != nil {
+		t.Fatalf("list strategies: %v", err)
+	}
+	if len(strategies) != 0 {
+		t.Fatalf("status question must not create strategy, got %d strategies", len(strategies))
+	}
+}
+
+func TestActiveStrategyCreateConfirmationUsesSavedState(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "strategy-create-confirm-saved-active.db")
+	st, err := store.New(dbPath)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	a := New(nil, st, DefaultConfig(), slog.Default())
+	a.SetAIClient(&staticAIClient{response: `{"topic_intent":"instant_reply","business_action":"direct_answer","reply_to_user":"还需要一点信息，我再继续。","confidence":1}`})
+
+	userID := int64(42)
+	a.saveActiveSkillSession(readyAI500StrategyCreateActiveSession(userID))
+
+	reply, err := a.thinkAndAct(context.Background(), "default", userID, "zh", "确认创建")
+	if err != nil {
+		t.Fatalf("think and act: %v", err)
+	}
+	if strings.Contains(reply, "还需要一点信息") {
+		t.Fatalf("confirmation should not use generic missing fallback, got: %s", reply)
+	}
+	if !strings.Contains(reply, "已创建策略") {
+		t.Fatalf("expected real strategy creation result, got: %s", reply)
+	}
+	strategies, err := st.Strategy().List("default")
+	if err != nil {
+		t.Fatalf("list strategies: %v", err)
+	}
+	if len(strategies) != 1 {
+		t.Fatalf("expected one created strategy, got %d", len(strategies))
+	}
+}
+
 func TestStrategyCreateRepairPromiseIsNotReturnedOnConfirmation(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "strategy-create-repair-promise.db")
 	st, err := store.New(dbPath)
@@ -1497,6 +1559,55 @@ func TestStrategyCreateRepairPromiseIsNotReturnedOnConfirmation(t *testing.T) {
 	if strings.Contains(reply, "马上") || strings.Contains(reply, "正在") || strings.Contains(reply, "稍后") {
 		t.Fatalf("repair promise should not be returned on confirmation, got: %s", reply)
 	}
+}
+
+func readyAI500StrategyCreateActiveSession(userID int64) ActiveSkillSession {
+	session := newActiveSkillSession(userID, "strategy_management", "create")
+	session.Goal = "写一个高频交易策略，杠杆5倍，要尽力做高收益率"
+	session.LocalHistory = []chatMessage{
+		{Role: "assistant", Content: "配置整理好了。确认后我再创建。"},
+	}
+	session.CollectedFields = map[string]any{
+		"name":                        "AI500高频",
+		"strategy_type":               "ai_trading",
+		"awaiting_final_confirmation": true,
+		strategyCreateConfigPatchField: map[string]any{
+			"strategy_type": "ai_trading",
+			"ai_config": map[string]any{
+				"coin_source": map[string]any{
+					"source_type": "ai500",
+					"use_ai500":   true,
+					"ai500_limit": 5,
+				},
+				"indicators": map[string]any{
+					"klines": map[string]any{
+						"primary_timeframe":       "1m",
+						"primary_count":           20,
+						"selected_timeframes":     []any{"1m", "5m", "15m"},
+						"enable_multi_timeframe":  true,
+						"enable_raw_klines":       true,
+						"raw_kline_limit":         30,
+						"higher_timeframe_weight": 0.3,
+					},
+					"enable_volume":       true,
+					"enable_oi":           true,
+					"enable_funding_rate": true,
+					"enable_quant_data":   true,
+				},
+				"risk_control": map[string]any{
+					"btc_eth_max_leverage":  5,
+					"altcoin_max_leverage":  5,
+					"min_confidence":        75,
+					"min_risk_reward_ratio": 2,
+				},
+				"prompt_sections": map[string]any{
+					"trading_frequency": "高频但不过度交易：目标每小时 1-3 笔，避免连续亏损后追单。",
+					"entry_standards":   "只在短周期趋势、成交量、OI 与资金费率形成共振时入场。",
+				},
+			},
+		},
+	}
+	return session
 }
 
 func TestModelCreateSessionRedirectsStrategyTypeChoiceToStrategyCreate(t *testing.T) {
